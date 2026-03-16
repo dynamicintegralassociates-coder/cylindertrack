@@ -388,9 +388,42 @@ function UsersView({ showToast }) {
     } catch (e) { showToast(e.message, "error"); }
   };
 
+  const exportBackup = async () => {
+    try {
+      const backup = await api.downloadBackup();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `cylindertrack-backup-${new Date().toISOString().split("T")[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast("Backup downloaded");
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  const importBackup = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const backup = JSON.parse(text);
+        if (!backup.data) { showToast("Invalid backup file", "error"); return; }
+        if (!confirm("This will replace ALL existing data with the backup. Are you sure?")) return;
+        await api.restoreBackup(backup.data);
+        showToast("Data restored successfully — refresh the page");
+      } catch (e) { showToast(e.message, "error"); }
+    };
+    input.click();
+  };
+
   return (
     <div>
-      <PageTitle title="Manage Users" subtitle="Add colleagues and manage your password" />
+      <PageTitle title="Manage Users & Backups" subtitle="Add colleagues, change passwords, and backup your data" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, maxWidth: 800 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 16 }}>Add New User</h3>
@@ -407,6 +440,18 @@ function UsersView({ showToast }) {
           <Input label="Current Password" type="password" value={curPw} onChange={e => setCurPw(e.target.value)} />
           <Input label="New Password" type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Minimum 4 characters" />
           <Btn onClick={changePw} disabled={!curPw || !newPw}>Change Password</Btn>
+        </Card>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, maxWidth: 800, marginTop: 24 }}>
+        <Card>
+          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Export Backup</h3>
+          <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 16, lineHeight: 1.5 }}>Download all customers, cylinder types, transactions, and pricing as a JSON file. Do this regularly to keep a copy of your data.</p>
+          <Btn onClick={exportBackup}>Download Backup</Btn>
+        </Card>
+        <Card>
+          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Restore from Backup</h3>
+          <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 16, lineHeight: 1.5 }}>Upload a previously exported JSON backup file. This will replace all existing data.</p>
+          <Btn variant="danger" onClick={importBackup}>Restore from File</Btn>
         </Card>
       </div>
     </div>

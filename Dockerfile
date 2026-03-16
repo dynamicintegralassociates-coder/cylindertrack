@@ -25,5 +25,6 @@ RUN npm prune --production
 EXPOSE 3001
 
 ENV NODE_ENV=production
+ENV DB_DIR=/data
 
 CMD ["node", "server/index.js"]

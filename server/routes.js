@@ -330,5 +330,75 @@ module.exports = function createRoutes(db) {
     });
   });
 
+  // ============================================================
+  // BACKUP / EXPORT
+  // ============================================================
+
+  // Export all data as JSON
+  router.get("/backup", (req, res) => {
+    const customers = db.prepare("SELECT * FROM customers ORDER BY name").all();
+    const cylinderTypes = db.prepare("SELECT * FROM cylinder_types ORDER BY sort_order, label").all();
+    const transactions = db.prepare("SELECT * FROM transactions ORDER BY date DESC, created DESC").all();
+    const pricing = db.prepare("SELECT * FROM customer_pricing").all();
+
+    const backup = {
+      exported_at: new Date().toISOString(),
+      version: "1.0",
+      data: { customers, cylinder_types: cylinderTypes, transactions, customer_pricing: pricing }
+    };
+
+    res.setHeader("Content-Disposition", `attachment; filename=cylindertrack-backup-${new Date().toISOString().split("T")[0]}.json`);
+    res.json(backup);
+  });
+
+  // Import data from JSON backup
+  router.post("/restore", (req, res) => {
+    const { data } = req.body;
+    if (!data || !data.customers || !data.cylinder_types || !data.transactions) {
+      return res.status(400).json({ error: "Invalid backup file" });
+    }
+
+    const runRestore = db.transaction(() => {
+      // Clear existing data
+      db.prepare("DELETE FROM customer_pricing").run();
+      db.prepare("DELETE FROM transactions").run();
+      db.prepare("DELETE FROM customers").run();
+      db.prepare("DELETE FROM cylinder_types").run();
+
+      // Restore cylinder types
+      const ctStmt = db.prepare("INSERT INTO cylinder_types (id, label, default_price, gas_group, item_type, sort_order) VALUES (?, ?, ?, ?, ?, ?)");
+      for (const ct of data.cylinder_types) {
+        ctStmt.run(ct.id, ct.label, ct.default_price, ct.gas_group || "", ct.item_type || "cylinder", ct.sort_order || 0);
+      }
+
+      // Restore customers
+      const cStmt = db.prepare("INSERT INTO customers (id, name, contact, phone, email, address, notes, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      for (const c of data.customers) {
+        cStmt.run(c.id, c.name, c.contact || "", c.phone || "", c.email || "", c.address || "", c.notes || "", c.created || new Date().toISOString());
+      }
+
+      // Restore transactions
+      const txStmt = db.prepare("INSERT INTO transactions (id, customer_id, customer_name, cylinder_type, type, qty, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      for (const tx of data.transactions) {
+        txStmt.run(tx.id, tx.customer_id, tx.customer_name || "", tx.cylinder_type, tx.type, tx.qty, tx.date, tx.notes || "");
+      }
+
+      // Restore pricing
+      if (data.customer_pricing) {
+        const pStmt = db.prepare("INSERT INTO customer_pricing (customer_id, cylinder_type_id, price) VALUES (?, ?, ?)");
+        for (const p of data.customer_pricing) {
+          pStmt.run(p.customer_id, p.cylinder_type_id, p.price);
+        }
+      }
+    });
+
+    try {
+      runRestore();
+      res.json({ success: true, message: "Data restored successfully" });
+    } catch (e) {
+      res.status(500).json({ error: "Restore failed: " + e.message });
+    }
+  });
+
   return router;
 };

@@ -69,3 +69,7 @@ export const getBilling = (month) => request(`/billing?month=${month}`);
 
 // Dashboard Stats
 export const getStats = () => request("/stats");
+
+// Backup & Restore
+export const downloadBackup = () => request("/backup");
+export const restoreBackup = (data) => request("/restore", { method: "POST", body: JSON.stringify({ data }) });
