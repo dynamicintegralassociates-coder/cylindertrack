@@ -42,6 +42,16 @@ module.exports = function createAuth(db) {
     next();
   }
 
+  // ---- HELPER: populate req.user from session cookie (doesn't block) ----
+  function populateUser(req) {
+    const token = req.cookies?.gc_session;
+    if (!token) return;
+    const session = db.prepare(
+      "SELECT s.*, u.username, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > datetime('now')"
+    ).get(token);
+    if (session) req.user = { id: session.user_id, username: session.username, role: session.role };
+  }
+
   // ---- ROUTES ----
 
   // Check if setup is needed (no users yet) + current auth status
@@ -126,6 +136,7 @@ module.exports = function createAuth(db) {
 
   // Change password (authenticated)
   router.post("/auth/change-password", (req, res) => {
+    populateUser(req);
     if (!req.user) return res.status(401).json({ error: "Not authenticated" });
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) return res.status(400).json({ error: "Both passwords required" });
@@ -148,6 +159,7 @@ module.exports = function createAuth(db) {
 
   // Add user (admin only)
   router.post("/auth/add-user", (req, res) => {
+    populateUser(req);
     if (!req.user || req.user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
     const { username, password, role } = req.body;
     if (!username?.trim() || !password) return res.status(400).json({ error: "Username and password required" });
