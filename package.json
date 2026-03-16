@@ -1,0 +1,25 @@
+{
+  "name": "cylindertrack",
+  "version": "1.0.0",
+  "description": "Gas Cylinder Rental Management System",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "cd client && npm run build",
+    "start": "node server/index.js",
+    "setup": "npm install && cd client && npm install",
+    "dev": "concurrently \"node --watch server/index.js\" \"cd client && npm run dev\""
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.7.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
