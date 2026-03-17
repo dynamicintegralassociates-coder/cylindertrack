@@ -1,260 +1,1253 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import * as api from "./api.js";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import api, { setAuthFailHandler } from "./api";
 
-const STATUS_COLORS = {
-  delivered: "#2563eb",
-  onsite: "#d97706",
-  returned: "#16a34a",
-  lost: "#dc2626",
-  billed: "#6d28d9",
+// ==================== STYLES ====================
+const C = {
+  bg: "#0f1117", panel: "#161820", border: "#23262f", card: "#1a1d27",
+  text: "#e2e4ea", muted: "#6b7280", accent: "#f59e0b", accentHover: "#d97706",
+  red: "#ef4444", green: "#22c55e", blue: "#3b82f6", purple: "#8b5cf6",
+  input: "#1e2130", inputBorder: "#2d3148",
 };
 
-const fmtDate = (d) => new Date(d).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" });
-const fmtCurrency = (n) => `$${Number(n).toFixed(2)}`;
-const today = () => new Date().toISOString().split("T")[0];
-
-// --- ICONS ---
-const Icon = ({ d, size = 18, color = "currentColor" }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
-);
-const Icons = {
-  dashboard: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1",
-  customers: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
-  cylinders: "M12 2L12 22M8 6h8a2 2 0 012 2v8a2 2 0 01-2 2H8a2 2 0 01-2-2V8a2 2 0 012-2zM10 2h4M10 22h4",
-  delivery: "M1 3h15v13H1zM16 8h4l3 3v5h-7V8zM5.5 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM18.5 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5z",
-  billing: "M12 1v22M17 5H9.5a3.5 3.5 0 100 7h5a3.5 3.5 0 110 7H6",
-  pricing: "M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82zM7 7h.01",
-  settings: "M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z",
-  plus: "M12 5v14M5 12h14",
-  search: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
-  check: "M20 6L9 17l-5-5",
-  x: "M18 6L6 18M6 6l12 12",
-  edit: "M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z",
-  truck: "M1 3h15v13H1zM16 8h4l3 3v5h-7V8z",
-  undo: "M3 10h10a5 5 0 015 5v2M3 10l6 6M3 10l6-6",
-  refresh: "M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15",
+const btnStyle = (color = C.accent) => ({
+  padding: "8px 16px", background: color, border: "none", borderRadius: 6,
+  color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer",
+});
+const inputStyle = {
+  padding: "8px 12px", background: C.input, border: `1px solid ${C.inputBorder}`,
+  borderRadius: 6, color: C.text, fontSize: 13, width: "100%", boxSizing: "border-box",
 };
+const cardStyle = {
+  background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
+  padding: 20, marginBottom: 16,
+};
+const labelStyle = { fontSize: 11, color: C.muted, marginBottom: 4, display: "block", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" };
+const fmtCurrency = (v) => `$${(v || 0).toFixed(2)}`;
 
-// --- SHARED UI ---
-const Card = ({ children, style }) => (
-  <div style={{ background: "#1a1d27", border: "1px solid #23262f", borderRadius: 12, padding: 20, ...style }}>{children}</div>
-);
-const Badge = ({ label, color }) => (
-  <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: `${color}22`, color, letterSpacing: "0.02em" }}>{label}</span>
-);
-const Btn = ({ children, onClick, variant = "primary", style, disabled }) => {
-  const styles = {
-    primary: { background: "linear-gradient(135deg, #f59e0b, #ea580c)", color: "#fff", border: "none" },
-    secondary: { background: "#23262f", color: "#d1d5db", border: "1px solid #2d3039" },
-    danger: { background: "#7f1d1d", color: "#fca5a5", border: "1px solid #991b1b" },
-    ghost: { background: "transparent", color: "#9ca3af", border: "1px solid #23262f" },
-  };
+function Card({ children, style }) {
+  return <div style={{ ...cardStyle, ...style }}>{children}</div>;
+}
+
+function StatCard({ label, value, color, icon }) {
   return (
-    <button disabled={disabled} onClick={onClick} style={{
-      ...styles[variant], padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer",
-      opacity: disabled ? 0.5 : 1, display: "inline-flex", alignItems: "center", gap: 6, transition: "all 0.15s", fontFamily: "inherit", ...style,
-    }}>{children}</button>
+    <Card style={{ flex: 1, minWidth: 140 }}>
+      <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 800, color: color || C.text, letterSpacing: "-0.02em" }}>{value}</div>
+    </Card>
   );
-};
-const Input = ({ label, ...props }) => (
-  <div style={{ marginBottom: 12 }}>
-    {label && <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</label>}
-    <input {...props} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #23262f", background: "#0f1117", color: "#e2e4ea", fontSize: 13, outline: "none", fontFamily: "inherit", ...props.style }} />
-  </div>
-);
-const Select = ({ label, children, ...props }) => (
-  <div style={{ marginBottom: 12 }}>
-    {label && <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</label>}
-    <select {...props} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #23262f", background: "#0f1117", color: "#e2e4ea", fontSize: 13, outline: "none", fontFamily: "inherit", ...props.style }}>{children}</select>
-  </div>
-);
-const PageTitle = ({ title, subtitle }) => (
-  <div style={{ marginBottom: 24 }}>
-    <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.03em", color: "#f3f4f6" }}>{title}</h1>
-    {subtitle && <p style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>{subtitle}</p>}
-  </div>
-);
-const StatCard = ({ label, value, accent }) => (
-  <Card style={{ flex: 1, minWidth: 160, position: "relative", overflow: "hidden" }}>
-    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent || "#f59e0b" }} />
-    <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
-    <div style={{ fontSize: 28, fontWeight: 800, marginTop: 6, letterSpacing: "-0.03em", fontFamily: "'JetBrains Mono', monospace", color: "#f3f4f6" }}>{value}</div>
-  </Card>
-);
-const Table = ({ columns, data, emptyMsg }) => (
-  <div style={{ overflowX: "auto" }}>
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-      <thead>
-        <tr>{columns.map((col, i) => (
-          <th key={i} style={{ textAlign: col.align || "left", padding: "10px 12px", borderBottom: "1px solid #23262f", color: "#6b7280", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{col.label}</th>
-        ))}</tr>
-      </thead>
-      <tbody>
-        {data.length === 0 ? (
-          <tr><td colSpan={columns.length} style={{ padding: 32, textAlign: "center", color: "#4b5563" }}>{emptyMsg || "No data"}</td></tr>
-        ) : data.map((row, ri) => (
-          <tr key={ri} style={{ borderBottom: "1px solid #1e2130" }}>
-            {columns.map((col, ci) => (
-              <td key={ci} style={{ padding: "10px 12px", textAlign: col.align || "left", color: "#d1d5db" }}>{col.render ? col.render(row) : row[col.key]}</td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
-const Modal = ({ title, onClose, children, width }) => (
-  <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={onClose}>
-    <div onClick={e => e.stopPropagation()} style={{ background: "#1a1d27", border: "1px solid #23262f", borderRadius: 14, padding: 28, width: width || 480, maxHeight: "85vh", overflow: "auto", animation: "fadeIn 0.2s" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em" }}>{title}</h2>
-        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280" }}><Icon d={Icons.x} /></button>
-      </div>
-      {children}
-    </div>
-  </div>
-);
+}
 
-// Custom hook to fetch data from the API
-function useApi(fetcher, deps = []) {
+function useApi(fn, deps = []) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
   const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const result = await fetcher();
-      setData(result);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    try { setData(await fn()); }
+    catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   }, deps);
-
   useEffect(() => { reload(); }, [reload]);
-
   return { data, loading, error, reload, setData };
 }
 
-// ==================== AUTH WRAPPER ====================
-export default function App() {
-  const [authState, setAuthState] = useState("loading"); // loading, setup, login, authenticated
-  const [user, setUser] = useState(null);
-  const [error, setError] = useState("");
-  const [formUser, setFormUser] = useState("");
-  const [formPass, setFormPass] = useState("");
-  const [formPass2, setFormPass2] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+// ==================== AUTH SCREENS ====================
+function SetupScreen({ onDone }) {
+  const [u, setU] = useState("");
+  const [p, setP] = useState("");
+  const [err, setErr] = useState("");
+  const submit = async () => {
+    try { const r = await api.setup(u, p); onDone(r.user); }
+    catch (e) { setErr(e.message); }
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: C.bg }}>
+      <Card style={{ width: 360, textAlign: "center" }}>
+        <div style={{ fontSize: 24, fontWeight: 800, color: C.accent, marginBottom: 4 }}>CylinderTrack</div>
+        <div style={{ color: C.muted, fontSize: 13, marginBottom: 24 }}>Create your admin account</div>
+        {err && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{err}</div>}
+        <input placeholder="Username" value={u} onChange={e => setU(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+        <input placeholder="Password" type="password" value={p} onChange={e => setP(e.target.value)} style={{ ...inputStyle, marginBottom: 16 }} onKeyDown={e => e.key === "Enter" && submit()} />
+        <button onClick={submit} style={{ ...btnStyle(), width: "100%" }}>Create Admin Account</button>
+      </Card>
+    </div>
+  );
+}
 
-  // Set up 401 handler
+function LoginScreen({ onDone }) {
+  const [u, setU] = useState("");
+  const [p, setP] = useState("");
+  const [err, setErr] = useState("");
+  const submit = async () => {
+    try { const r = await api.login(u, p); onDone(r.user); }
+    catch (e) { setErr(e.message); }
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: C.bg }}>
+      <Card style={{ width: 360, textAlign: "center" }}>
+        <div style={{ fontSize: 24, fontWeight: 800, color: C.accent, marginBottom: 4 }}>CylinderTrack</div>
+        <div style={{ color: C.muted, fontSize: 13, marginBottom: 24 }}>Sign in to continue</div>
+        {err && <div style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{err}</div>}
+        <input placeholder="Username" value={u} onChange={e => setU(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+        <input placeholder="Password" type="password" value={p} onChange={e => setP(e.target.value)} style={{ ...inputStyle, marginBottom: 16 }} onKeyDown={e => e.key === "Enter" && submit()} />
+        <button onClick={submit} style={{ ...btnStyle(), width: "100%" }}>Sign In</button>
+      </Card>
+    </div>
+  );
+}
+
+// ==================== ICONS ====================
+const Icons = {
+  dashboard: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
+  customers: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  settings: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+  delivery: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>,
+  cylinders: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>,
+  billing: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
+  pricing: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>,
+  route: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+  users: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>,
+  sync: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>,
+};
+
+// ==================== OPTIMOROUTE VIEW ====================
+function OptimoRouteView({ customers, cylinderTypes, showToast, refreshAll }) {
+  const [tab, setTab] = useState("sync"); // sync | unmatched | log | settings
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeySaved, setApiKeySaved] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [dateFrom, setDateFrom] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    return d.toISOString().split("T")[0];
+  });
+  const [dateTo, setDateTo] = useState(() => new Date().toISOString().split("T")[0]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
+  const [debugResult, setDebugResult] = useState(null);
+  const [debugging, setDebugging] = useState(false);
+  const [unmatched, setUnmatched] = useState([]);
+  const [syncLog, setSyncLog] = useState([]);
+  const [matchModal, setMatchModal] = useState(null);
+
+  // Load settings on mount
   useEffect(() => {
-    api.setAuthFailHandler(() => setAuthState("login"));
+    api.getSettings().then(s => {
+      if (s.optimoroute_api_key) {
+        setApiKey(s.optimoroute_api_key);
+        setApiKeySaved(true);
+      }
+    }).catch(() => {});
   }, []);
 
-  // Check auth status on load
+  // Load unmatched orders
   useEffect(() => {
-    api.getAuthStatus().then(status => {
-      if (status.needsSetup) setAuthState("setup");
-      else if (status.authenticated) { setUser(status.user); setAuthState("authenticated"); }
-      else setAuthState("login");
-    }).catch(() => setAuthState("login"));
-  }, []);
+    if (tab === "unmatched") {
+      api.orGetUnmatched().then(setUnmatched).catch(() => {});
+    }
+    if (tab === "log") {
+      api.orGetSyncLog().then(setSyncLog).catch(() => {});
+    }
+  }, [tab]);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    if (!formUser || !formPass) return;
-    setSubmitting(true); setError("");
+  const saveApiKey = async () => {
     try {
-      const res = await api.login(formUser, formPass);
-      setUser(res.user); setAuthState("authenticated");
-      setFormUser(""); setFormPass("");
-    } catch (e) { setError(e.message); }
-    setSubmitting(false);
+      await api.updateSettings({ optimoroute_api_key: apiKey });
+      setApiKeySaved(true);
+      showToast("API key saved");
+    } catch (e) { showToast(e.message, "error"); }
   };
 
-  const handleSetup = async (e) => {
-    e.preventDefault();
-    if (!formUser || !formPass) return;
-    if (formPass !== formPass2) { setError("Passwords don't match"); return; }
-    if (formPass.length < 4) { setError("Password must be at least 4 characters"); return; }
-    setSubmitting(true); setError("");
+  const testConnection = async () => {
+    setTestResult(null);
     try {
-      const res = await api.setup(formUser, formPass);
-      setUser(res.user); setAuthState("authenticated");
-      setFormUser(""); setFormPass(""); setFormPass2("");
-    } catch (e) { setError(e.message); }
-    setSubmitting(false);
+      const r = await api.orTestConnection();
+      setTestResult(r);
+    } catch (e) { setTestResult({ success: false, message: e.message }); }
   };
 
-  const handleLogout = async () => {
-    await api.logout().catch(() => {});
-    setUser(null); setAuthState("login");
+  const runSync = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const r = await api.orSync(dateFrom, dateTo);
+      setSyncResult(r);
+      refreshAll();
+      showToast(`Imported ${r.summary.imported} orders`);
+    } catch (e) {
+      setSyncResult({ success: false, error: e.message });
+      showToast(e.message, "error");
+    } finally {
+      setSyncing(false);
+    }
   };
 
-  if (authState === "loading") {
-    return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", color: "#6b7280", fontFamily: "'DM Sans', sans-serif" }}>Loading...</div>;
-  }
+  const doManualImport = async (orderNo, custId, ctId, type, qty, date) => {
+    try {
+      await api.orImportManual({ order_no: orderNo, customer_id: custId, cylinder_type: ctId, type, qty, date });
+      showToast("Order imported");
+      setMatchModal(null);
+      api.orGetUnmatched().then(setUnmatched);
+      refreshAll();
+    } catch (e) { showToast(e.message, "error"); }
+  };
 
-  if (authState === "setup" || authState === "login") {
-    const isSetup = authState === "setup";
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f1117", fontFamily: "'DM Sans', 'Segoe UI', sans-serif" }}>
-        <div style={{ width: 400, animation: "fadeIn 0.3s" }}>
-          <div style={{ textAlign: "center", marginBottom: 32 }}>
-            <div style={{ width: 56, height: 56, borderRadius: 14, background: "linear-gradient(135deg, #f59e0b, #ef4444)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 24, color: "#fff", marginBottom: 16 }}>GC</div>
-            <h1 style={{ fontSize: 24, fontWeight: 800, color: "#f3f4f6", letterSpacing: "-0.03em" }}>CylinderTrack</h1>
-            <p style={{ fontSize: 13, color: "#6b7280", marginTop: 6 }}>
-              {isSetup ? "Create your admin account to get started" : "Sign in to access your data"}
-            </p>
-          </div>
-          <form onSubmit={isSetup ? handleSetup : handleLogin}>
-            <div style={{ background: "#1a1d27", border: "1px solid #23262f", borderRadius: 14, padding: 24 }}>
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>Username</label>
-                <input value={formUser} onChange={e => { setFormUser(e.target.value); setError(""); }} autoFocus placeholder="Enter username..." style={{ width: "100%", padding: "11px 14px", borderRadius: 8, border: "1px solid #23262f", background: "#0f1117", color: "#e2e4ea", fontSize: 14, outline: "none", fontFamily: "inherit" }} />
+  const runDebug = async () => {
+    setDebugging(true);
+    setDebugResult(null);
+    try {
+      const r = await api.orDebug(dateFrom, dateTo);
+      setDebugResult(r);
+    } catch (e) { setDebugResult({ error: e.message }); }
+    finally { setDebugging(false); }
+  };
+
+  const tabs = [
+    { id: "sync", label: "Sync Orders" },
+    { id: "unmatched", label: `Unmatched (${unmatched.length})` },
+    { id: "log", label: "Sync History" },
+    { id: "settings", label: "Settings" },
+  ];
+
+  return (
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+        {Icons.sync} OptimoRoute Integration
+      </h2>
+
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.panel, borderRadius: 8, padding: 4 }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer",
+            background: tab === t.id ? C.accent : "transparent",
+            color: tab === t.id ? "#000" : C.muted, fontWeight: 600, fontSize: 13,
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* ─── SYNC TAB ──────────────────────────────── */}
+      {tab === "sync" && (
+        <div>
+          {!apiKeySaved && (
+            <Card>
+              <div style={{ color: C.accent, fontWeight: 700, marginBottom: 8 }}>Setup Required</div>
+              <p style={{ color: C.muted, fontSize: 13, marginBottom: 12 }}>
+                Enter your OptimoRoute API key to enable auto-import. Find it in OptimoRoute → Administration → Settings → WS API.
+              </p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="Paste API key here" style={{ ...inputStyle, flex: 1 }} />
+                <button onClick={saveApiKey} style={btnStyle()}>Save Key</button>
               </div>
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>{isSetup ? "Create Password" : "Password"}</label>
-                <input type="password" value={formPass} onChange={e => { setFormPass(e.target.value); setError(""); }} placeholder="Enter password..." style={{ width: "100%", padding: "11px 14px", borderRadius: 8, border: "1px solid #23262f", background: "#0f1117", color: "#e2e4ea", fontSize: 14, outline: "none", fontFamily: "inherit" }} />
-              </div>
-              {isSetup && <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>Confirm Password</label>
-                <input type="password" value={formPass2} onChange={e => { setFormPass2(e.target.value); setError(""); }} placeholder="Confirm password..." style={{ width: "100%", padding: "11px 14px", borderRadius: 8, border: "1px solid #23262f", background: "#0f1117", color: "#e2e4ea", fontSize: 14, outline: "none", fontFamily: "inherit" }} />
-              </div>}
-              {error && <div style={{ padding: "8px 12px", borderRadius: 8, background: "#7f1d1d", color: "#fca5a5", fontSize: 12, marginBottom: 16, fontWeight: 500 }}>{error}</div>}
-              <button type="submit" disabled={submitting} style={{ width: "100%", padding: "11px", borderRadius: 8, border: "none", background: "linear-gradient(135deg, #f59e0b, #ea580c)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: submitting ? "wait" : "pointer", fontFamily: "inherit", opacity: submitting ? 0.7 : 1 }}>
-                {submitting ? "Please wait..." : (isSetup ? "Create Account & Enter" : "Sign In")}
-              </button>
-            </div>
-          </form>
-          {isSetup && <p style={{ textAlign: "center", fontSize: 11, color: "#4b5563", marginTop: 16, lineHeight: 1.5 }}>
-            This is a one-time setup. You can add more users later from the app. Your colleague will need their own username and password.
-          </p>}
+            </Card>
+          )}
+
+          {apiKeySaved && (
+            <>
+              <Card>
+                <div style={{ fontWeight: 700, marginBottom: 12 }}>Import Completed Deliveries & Returns</div>
+                <p style={{ color: C.muted, fontSize: 13, marginBottom: 16 }}>
+                  Fetch completed orders from OptimoRoute and auto-create delivery/return transactions. Orders are matched to customers by location name or address.
+                </p>
+                <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+                  <div>
+                    <label style={labelStyle}>From Date</label>
+                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ ...inputStyle, width: 160 }} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>To Date</label>
+                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ ...inputStyle, width: 160 }} />
+                  </div>
+                  <button onClick={runSync} disabled={syncing} style={{ ...btnStyle(syncing ? C.muted : C.green), minWidth: 140 }}>
+                    {syncing ? "⏳ Syncing..." : "🔄 Sync Now"}
+                  </button>
+                  <button onClick={() => {
+                    const d = new Date(); d.setDate(d.getDate() - 1);
+                    setDateFrom(d.toISOString().split("T")[0]);
+                    setDateTo(d.toISOString().split("T")[0]);
+                  }} style={{ ...btnStyle(C.blue), fontSize: 12 }}>Yesterday</button>
+                  <button onClick={() => {
+                    const d = new Date();
+                    setDateFrom(d.toISOString().split("T")[0]);
+                    setDateTo(d.toISOString().split("T")[0]);
+                  }} style={{ ...btnStyle(C.blue), fontSize: 12 }}>Today</button>
+                  <button onClick={() => {
+                    const d = new Date();
+                    const day = d.getDay();
+                    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+                    const mon = new Date(d.setDate(diff));
+                    const fri = new Date(mon);
+                    fri.setDate(fri.getDate() + 4);
+                    setDateFrom(mon.toISOString().split("T")[0]);
+                    setDateTo(fri.toISOString().split("T")[0]);
+                  }} style={{ ...btnStyle(C.blue), fontSize: 12 }}>This Week</button>
+                  <button onClick={runDebug} disabled={debugging} style={{ ...btnStyle(debugging ? C.muted : C.purple), fontSize: 12 }}>
+                    {debugging ? "⏳ Loading..." : "🔍 Debug Preview"}
+                  </button>
+                </div>
+              </Card>
+
+              {/* Debug Raw Response */}
+              {debugResult && (
+                <Card style={{ borderColor: C.purple }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, color: C.purple }}>🔍 Raw API Response</div>
+                    <button onClick={() => setDebugResult(null)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer" }}>✕ Close</button>
+                  </div>
+                  <p style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>
+                    This shows what OptimoRoute returns. Send a screenshot to Claude if sync isn't working.
+                  </p>
+                  <pre style={{ background: C.input, padding: 12, borderRadius: 6, fontSize: 11, color: C.text, maxHeight: 400, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                    {JSON.stringify(debugResult, null, 2)}
+                  </pre>
+                </Card>
+              )}
+
+              {/* Sync Result */}
+              {syncResult && (
+                <Card style={{ borderColor: syncResult.success ? C.green : C.red }}>
+                  <div style={{ fontWeight: 700, color: syncResult.success ? C.green : C.red, marginBottom: 8 }}>
+                    {syncResult.success ? "✅ Sync Complete" : "❌ Sync Failed"}
+                  </div>
+
+                  {syncResult.summary && (
+                    <div style={{ display: "flex", gap: 20, marginBottom: 16 }}>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: C.text }}>{syncResult.summary.totalFetched}</div>
+                        <div style={{ fontSize: 11, color: C.muted }}>Orders Found</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: C.green }}>{syncResult.summary.imported}</div>
+                        <div style={{ fontSize: 11, color: C.muted }}>Imported</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: C.accent }}>{syncResult.summary.skipped}</div>
+                        <div style={{ fontSize: 11, color: C.muted }}>Skipped</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {syncResult.importedOrders?.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: C.green, marginBottom: 6 }}>Imported Orders:</div>
+                      <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                              <th style={{ textAlign: "left", padding: "4px 8px", color: C.muted }}>Order</th>
+                              <th style={{ textAlign: "left", padding: "4px 8px", color: C.muted }}>Customer</th>
+                              <th style={{ textAlign: "left", padding: "4px 8px", color: C.muted }}>Type</th>
+                              <th style={{ textAlign: "left", padding: "4px 8px", color: C.muted }}>Cylinder</th>
+                              <th style={{ textAlign: "right", padding: "4px 8px", color: C.muted }}>Qty</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {syncResult.importedOrders.map((o, i) => (
+                              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                                <td style={{ padding: "4px 8px" }}>{o.orderNo}</td>
+                                <td style={{ padding: "4px 8px" }}>{o.customer}</td>
+                                <td style={{ padding: "4px 8px" }}>
+                                  <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: o.type === "delivery" ? "#22c55e22" : "#ef444422", color: o.type === "delivery" ? C.green : C.red }}>
+                                    {o.type}
+                                  </span>
+                                </td>
+                                <td style={{ padding: "4px 8px" }}>{o.cylinderType}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right" }}>{o.qty}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {syncResult.skippedOrders?.length > 0 && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary style={{ cursor: "pointer", fontSize: 13, color: C.accent, fontWeight: 600 }}>
+                        Skipped Orders ({syncResult.skippedOrders.length})
+                      </summary>
+                      <div style={{ maxHeight: 200, overflowY: "auto", marginTop: 8 }}>
+                        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                              <th style={{ textAlign: "left", padding: "4px 8px", color: C.muted }}>Order</th>
+                              <th style={{ textAlign: "left", padding: "4px 8px", color: C.muted }}>Reason</th>
+                              <th style={{ textAlign: "left", padding: "4px 8px", color: C.muted }}>Location</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {syncResult.skippedOrders.map((o, i) => (
+                              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                                <td style={{ padding: "4px 8px" }}>{o.orderNo}</td>
+                                <td style={{ padding: "4px 8px", color: C.accent }}>{o.reason}</td>
+                                <td style={{ padding: "4px 8px", color: C.muted }}>{o.locationName || o.locationAddress || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  )}
+
+                  {syncResult.error && (
+                    <div style={{ color: C.red, fontSize: 13 }}>{syncResult.error}</div>
+                  )}
+                </Card>
+              )}
+            </>
+          )}
         </div>
-        <style>{`
-          @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-          * { box-sizing: border-box; margin: 0; padding: 0; }
-          input { font-family: 'DM Sans', sans-serif; }
-        `}</style>
+      )}
+
+      {/* ─── UNMATCHED TAB ─────────────────────────── */}
+      {tab === "unmatched" && (
+        <div>
+          <Card>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Unmatched Orders</div>
+            <p style={{ color: C.muted, fontSize: 13, marginBottom: 16 }}>
+              These orders were fetched from OptimoRoute but couldn't be auto-matched to a customer or cylinder type. You can manually assign them.
+            </p>
+
+            {unmatched.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 32, color: C.muted }}>No unmatched orders — all caught up!</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      {["Order #", "Date", "Location", "Address", "Driver", "Notes", "Action"].map(h => (
+                        <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {unmatched.map(o => (
+                      <tr key={o.order_no} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "6px 8px", fontWeight: 600 }}>{o.order_no}</td>
+                        <td style={{ padding: "6px 8px" }}>{o.order_date}</td>
+                        <td style={{ padding: "6px 8px" }}>{o.location_name}</td>
+                        <td style={{ padding: "6px 8px", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{o.location_address}</td>
+                        <td style={{ padding: "6px 8px" }}>{o.driver_name}</td>
+                        <td style={{ padding: "6px 8px", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>{o.notes}</td>
+                        <td style={{ padding: "6px 8px" }}>
+                          <button onClick={() => setMatchModal(o)} style={{ ...btnStyle(C.blue), padding: "4px 10px", fontSize: 11 }}>
+                            Match & Import
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
+          {/* Match Modal */}
+          {matchModal && (
+            <MatchModal
+              order={matchModal}
+              customers={customers}
+              cylinderTypes={cylinderTypes}
+              onImport={doManualImport}
+              onClose={() => setMatchModal(null)}
+            />
+          )}
+        </div>
+      )}
+
+      {/* ─── SYNC LOG TAB ──────────────────────────── */}
+      {tab === "log" && (
+        <Card>
+          <div style={{ fontWeight: 700, marginBottom: 12 }}>Sync History</div>
+          {syncLog.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 32, color: C.muted }}>No syncs yet</div>
+          ) : (
+            <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  {["Date Range", "Fetched", "Imported", "Skipped", "Synced At"].map(h => (
+                    <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {syncLog.map(l => (
+                  <tr key={l.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td style={{ padding: "6px 8px" }}>{l.sync_date}</td>
+                    <td style={{ padding: "6px 8px" }}>{l.orders_fetched}</td>
+                    <td style={{ padding: "6px 8px", color: C.green, fontWeight: 600 }}>{l.orders_imported}</td>
+                    <td style={{ padding: "6px 8px", color: C.accent }}>{l.orders_skipped}</td>
+                    <td style={{ padding: "6px 8px", color: C.muted }}>{new Date(l.created).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      )}
+
+      {/* ─── SETTINGS TAB ──────────────────────────── */}
+      {tab === "settings" && (
+        <div>
+          <Card>
+            <div style={{ fontWeight: 700, marginBottom: 12 }}>OptimoRoute API Key</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <input
+                value={apiKey}
+                onChange={e => { setApiKey(e.target.value); setApiKeySaved(false); }}
+                placeholder="Paste your OptimoRoute API key"
+                style={{ ...inputStyle, flex: 1, fontFamily: "monospace" }}
+              />
+              <button onClick={saveApiKey} style={btnStyle()}>Save</button>
+              <button onClick={testConnection} style={btnStyle(C.blue)}>Test</button>
+            </div>
+            {testResult && (
+              <div style={{ padding: "8px 12px", borderRadius: 6, fontSize: 13, background: testResult.success ? "#22c55e15" : "#ef444415", color: testResult.success ? C.green : C.red }}>
+                {testResult.success ? "✅ " : "❌ "}{testResult.message}
+              </div>
+            )}
+          </Card>
+
+          <Card>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>How Auto-Matching Works</div>
+            <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.8 }}>
+              <p>When you sync, CylinderTrack fetches completed orders from OptimoRoute and tries to auto-match each order to a customer and cylinder type:</p>
+              <p><strong style={{ color: C.text }}>Customer matching:</strong> The order's location name is compared to your customer names, and the delivery address is compared to customer addresses. Partial matches are also checked.</p>
+              <p><strong style={{ color: C.text }}>Cylinder type matching:</strong> The order's custom fields (cylinder_type, product, gas_type, item) and notes are checked against your cylinder type labels.</p>
+              <p><strong style={{ color: C.text }}>Transaction type:</strong> OptimoRoute Pickup (P) orders become Returns. Delivery (D) and Task (T) orders become Deliveries.</p>
+              <p><strong style={{ color: C.text }}>Quantity:</strong> Extracted from custom fields (quantity, qty, count) or parsed from notes (e.g. "2x Oxygen").</p>
+              <p>Orders that can't be auto-matched appear in the Unmatched tab for manual assignment.</p>
+            </div>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Match Modal ────────────────────────────────────────────
+function MatchModal({ order, customers, cylinderTypes, onImport, onClose }) {
+  const [custId, setCustId] = useState("");
+  const [ctId, setCtId] = useState("");
+  const [type, setType] = useState(order.order_type || "delivery");
+  const [qty, setQty] = useState(1);
+  const [search, setSearch] = useState("");
+
+  const filteredCustomers = useMemo(() => {
+    if (!search) return customers;
+    const s = search.toLowerCase();
+    return customers.filter(c => c.name.toLowerCase().includes(s) || c.address.toLowerCase().includes(s));
+  }, [customers, search]);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999 }}>
+      <Card style={{ width: 520, maxHeight: "80vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Match Order: {order.order_no}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 18 }}>✕</button>
+        </div>
+
+        {/* Order info */}
+        <div style={{ background: C.input, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13 }}>
+          <div><strong>Date:</strong> {order.order_date}</div>
+          <div><strong>Location:</strong> {order.location_name}</div>
+          <div><strong>Address:</strong> {order.location_address}</div>
+          <div><strong>Driver:</strong> {order.driver_name}</div>
+          {order.notes && <div><strong>Notes:</strong> {order.notes}</div>}
+        </div>
+
+        {/* Customer search */}
+        <label style={labelStyle}>Customer</label>
+        <input placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, marginBottom: 8 }} />
+        <select value={custId} onChange={e => setCustId(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }}>
+          <option value="">Select customer...</option>
+          {filteredCustomers.map(c => (
+            <option key={c.id} value={c.id}>{c.name} — {c.address}</option>
+          ))}
+        </select>
+
+        {/* Cylinder type */}
+        <label style={labelStyle}>Cylinder Type</label>
+        <select value={ctId} onChange={e => setCtId(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }}>
+          <option value="">Select cylinder type...</option>
+          {cylinderTypes.map(ct => (
+            <option key={ct.id} value={ct.id}>{ct.label}</option>
+          ))}
+        </select>
+
+        {/* Type & Qty */}
+        <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Type</label>
+            <select value={type} onChange={e => setType(e.target.value)} style={inputStyle}>
+              <option value="delivery">Delivery</option>
+              <option value="return">Return</option>
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Quantity</label>
+            <input type="number" min="1" value={qty} onChange={e => setQty(parseInt(e.target.value) || 1)} style={inputStyle} />
+          </div>
+        </div>
+
+        <button
+          onClick={() => onImport(order.order_no, custId, ctId, type, qty, order.order_date)}
+          disabled={!custId || !ctId}
+          style={{ ...btnStyle(!custId || !ctId ? C.muted : C.green), width: "100%" }}
+        >
+          Import Transaction
+        </button>
+      </Card>
+    </div>
+  );
+}
+
+// ==================== DASHBOARD VIEW ====================
+function DashboardView({ stats }) {
+  return (
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Dashboard</h2>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+        <StatCard label="Customers" value={stats?.total_customers || 0} color={C.blue} />
+        <StatCard label="Cylinders On-Hand" value={stats?.total_on_hand || 0} color={C.accent} />
+        <StatCard label="Deliveries" value={stats?.total_deliveries || 0} color={C.green} />
+        <StatCard label="Returns" value={stats?.total_returns || 0} color={C.red} />
+      </div>
+      {stats?.optimoroute?.last_sync && (
+        <Card>
+          <div style={{ fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>{Icons.sync} OptimoRoute</div>
+          <div style={{ fontSize: 13, color: C.muted }}>
+            Last sync: {new Date(stats.optimoroute.last_sync.created).toLocaleString()} · {stats.optimoroute.total_imported} total imported
+          </div>
+        </Card>
+      )}
+      {stats?.recent_transactions?.length > 0 && (
+        <Card>
+          <div style={{ fontWeight: 700, marginBottom: 12 }}>Recent Transactions</div>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {["Date", "Type", "Qty", "Source", "Notes"].map(h => (
+                  <th key={h} style={{ textAlign: "left", padding: "4px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {stats.recent_transactions.map(tx => (
+                <tr key={tx.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: "4px 8px" }}>{tx.date}</td>
+                  <td style={{ padding: "4px 8px" }}>
+                    <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: tx.type === "delivery" ? "#22c55e22" : tx.type === "return" ? "#ef444422" : "#3b82f622", color: tx.type === "delivery" ? C.green : tx.type === "return" ? C.red : C.blue }}>
+                      {tx.type}
+                    </span>
+                  </td>
+                  <td style={{ padding: "4px 8px" }}>{tx.qty}</td>
+                  <td style={{ padding: "4px 8px" }}>
+                    {tx.source === "optimoroute" ? (
+                      <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#8b5cf622", color: C.purple }}>OptimoRoute</span>
+                    ) : (
+                      <span style={{ color: C.muted, fontSize: 11 }}>manual</span>
+                    )}
+                  </td>
+                  <td style={{ padding: "4px 8px", color: C.muted, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.notes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ==================== CUSTOMERS VIEW ====================
+function CustomersView({ customers, reload, showToast }) {
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ name: "", contact: "", phone: "", email: "", address: "", notes: "", onedrive_link: "" });
+  const [search, setSearch] = useState("");
+
+  const startEdit = (c) => {
+    setEditing(c?.id || "new");
+    setForm(c ? { name: c.name, contact: c.contact, phone: c.phone, email: c.email, address: c.address, notes: c.notes, onedrive_link: c.onedrive_link || "" } : { name: "", contact: "", phone: "", email: "", address: "", notes: "", onedrive_link: "" });
+  };
+
+  const save = async () => {
+    try {
+      if (editing === "new") await api.createCustomer(form);
+      else await api.updateCustomer(editing, form);
+      reload();
+      setEditing(null);
+      showToast(editing === "new" ? "Customer created" : "Customer updated");
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  const del = async (id) => {
+    if (!confirm("Delete this customer?")) return;
+    try { await api.deleteCustomer(id); reload(); showToast("Customer deleted"); }
+    catch (e) { showToast(e.message, "error"); }
+  };
+
+  const filtered = useMemo(() => {
+    if (!search) return customers || [];
+    const s = search.toLowerCase();
+    return (customers || []).filter(c => c.name.toLowerCase().includes(s) || c.address.toLowerCase().includes(s) || c.contact.toLowerCase().includes(s));
+  }, [customers, search]);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700 }}>Customers</h2>
+        <button onClick={() => startEdit(null)} style={btnStyle()}>+ Add Customer</button>
+      </div>
+      <input placeholder="Search by name, address, contact..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, marginBottom: 16, maxWidth: 400 }} />
+
+      {editing && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, marginBottom: 12 }}>{editing === "new" ? "New Customer" : "Edit Customer"}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {[["name", "Company Name *"], ["contact", "Contact Person"], ["phone", "Phone"], ["email", "Email"], ["address", "Delivery Address"]].map(([key, lbl]) => (
+              <div key={key} style={key === "address" ? { gridColumn: "1/-1" } : {}}>
+                <label style={labelStyle}>{lbl}</label>
+                <input value={form[key]} onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))} style={inputStyle} />
+              </div>
+            ))}
+            <div style={{ gridColumn: "1/-1" }}>
+              <label style={labelStyle}>OneDrive Folder Link</label>
+              <input value={form.onedrive_link} onChange={e => setForm(p => ({ ...p, onedrive_link: e.target.value }))} placeholder="https://onedrive.live.com/..." style={inputStyle} />
+            </div>
+            <div style={{ gridColumn: "1/-1" }}>
+              <label style={labelStyle}>Notes</label>
+              <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} style={{ ...inputStyle, resize: "vertical" }} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={save} style={btnStyle(C.green)}>Save</button>
+            <button onClick={() => setEditing(null)} style={btnStyle(C.muted)}>Cancel</button>
+          </div>
+        </Card>
+      )}
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {["Address", "Company", "Contact", "Phone", "OneDrive", "Actions"].map(h => (
+                <th key={h} style={{ textAlign: "left", padding: "8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(c => (
+              <tr key={c.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <td style={{ padding: "8px", color: C.accent, fontWeight: 500 }}>{c.address || "—"}</td>
+                <td style={{ padding: "8px", fontWeight: 600 }}>{c.name}</td>
+                <td style={{ padding: "8px" }}>{c.contact}</td>
+                <td style={{ padding: "8px" }}>{c.phone}</td>
+                <td style={{ padding: "8px" }}>
+                  {c.onedrive_link ? <a href={c.onedrive_link} target="_blank" rel="noreferrer" style={{ color: C.blue, textDecoration: "none", fontWeight: 600 }}>OneDrive ↗</a> : "—"}
+                </td>
+                <td style={{ padding: "8px" }}>
+                  <button onClick={() => startEdit(c)} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 12, marginRight: 8 }}>Edit</button>
+                  <button onClick={() => del(c.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filtered.length === 0 && <div style={{ textAlign: "center", padding: 32, color: C.muted }}>No customers found</div>}
+      </div>
+    </div>
+  );
+}
+
+// ==================== CYLINDER TYPES VIEW ====================
+function CylinderTypesView({ cylinderTypes, reload, showToast }) {
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ label: "", default_price: 0, gas_group: "", item_type: "cylinder", sort_order: 0 });
+
+  const startEdit = (ct) => {
+    setEditing(ct?.id || "new");
+    setForm(ct || { label: "", default_price: 0, gas_group: "", item_type: "cylinder", sort_order: 0 });
+  };
+
+  const save = async () => {
+    try {
+      if (editing === "new") await api.createCylinderType(form);
+      else await api.updateCylinderType(editing, form);
+      reload(); setEditing(null);
+      showToast(editing === "new" ? "Type created" : "Type updated");
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  const del = async (id) => {
+    if (!confirm("Delete this cylinder type?")) return;
+    try { await api.deleteCylinderType(id); reload(); showToast("Type deleted"); }
+    catch (e) { showToast(e.message, "error"); }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700 }}>Cylinder Types</h2>
+        <button onClick={() => startEdit(null)} style={btnStyle()}>+ Add Type</button>
+      </div>
+      {editing && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+            <div><label style={labelStyle}>Label *</label><input value={form.label} onChange={e => setForm(p => ({ ...p, label: e.target.value }))} style={inputStyle} /></div>
+            <div><label style={labelStyle}>Default Price</label><input type="number" step="0.01" value={form.default_price} onChange={e => setForm(p => ({ ...p, default_price: parseFloat(e.target.value) || 0 }))} style={inputStyle} /></div>
+            <div><label style={labelStyle}>Gas Group</label><input value={form.gas_group} onChange={e => setForm(p => ({ ...p, gas_group: e.target.value }))} style={inputStyle} /></div>
+            <div>
+              <label style={labelStyle}>Item Type</label>
+              <select value={form.item_type} onChange={e => setForm(p => ({ ...p, item_type: e.target.value }))} style={inputStyle}>
+                <option value="cylinder">Cylinder (rental)</option>
+                <option value="sale">Sale item</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={save} style={btnStyle(C.green)}>Save</button>
+            <button onClick={() => setEditing(null)} style={btnStyle(C.muted)}>Cancel</button>
+          </div>
+        </Card>
+      )}
+      <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+        <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+          {["Label", "Default Price", "Gas Group", "Type", "Actions"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
+        </tr></thead>
+        <tbody>
+          {(cylinderTypes || []).map(ct => (
+            <tr key={ct.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+              <td style={{ padding: "8px", fontWeight: 600 }}>{ct.label}</td>
+              <td style={{ padding: "8px" }}>{fmtCurrency(ct.default_price)}</td>
+              <td style={{ padding: "8px" }}>{ct.gas_group || "—"}</td>
+              <td style={{ padding: "8px" }}>{ct.item_type}</td>
+              <td style={{ padding: "8px" }}>
+                <button onClick={() => startEdit(ct)} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 12, marginRight: 8 }}>Edit</button>
+                <button onClick={() => del(ct.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>Delete</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ==================== DELIVER/RETURN VIEW ====================
+function DeliveryView({ customers, cylinderTypes, showToast, refreshAll }) {
+  const [form, setForm] = useState({
+    customer_id: "", cylinder_type: "", delivered: 0, returned: 0,
+    date: new Date().toISOString().split("T")[0], notes: ""
+  });
+
+  const submit = async () => {
+    try {
+      const promises = [];
+      if (form.delivered > 0) {
+        promises.push(api.createTransaction({
+          customer_id: form.customer_id, cylinder_type: form.cylinder_type,
+          type: "delivery", qty: form.delivered, date: form.date, notes: form.notes,
+        }));
+      }
+      if (form.returned > 0) {
+        promises.push(api.createTransaction({
+          customer_id: form.customer_id, cylinder_type: form.cylinder_type,
+          type: "return", qty: form.returned, date: form.date, notes: form.notes,
+        }));
+      }
+      if (promises.length === 0) return showToast("Enter at least one quantity", "error");
+      await Promise.all(promises);
+      const parts = [];
+      if (form.delivered > 0) parts.push(`${form.delivered} delivered`);
+      if (form.returned > 0) parts.push(`${form.returned} returned`);
+      showToast(`Recorded: ${parts.join(", ")}`);
+      setForm(f => ({ ...f, customer_id: "", cylinder_type: "", delivered: 0, returned: 0, notes: "" }));
+      refreshAll();
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  return (
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Deliver / Return</h2>
+      <Card>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div>
+            <label style={labelStyle}>Customer</label>
+            <select value={form.customer_id} onChange={e => setForm(p => ({ ...p, customer_id: e.target.value }))} style={inputStyle}>
+              <option value="">Select customer...</option>
+              {(customers || []).map(c => <option key={c.id} value={c.id}>{c.name} — {c.address}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Cylinder Type</label>
+            <select value={form.cylinder_type} onChange={e => setForm(p => ({ ...p, cylinder_type: e.target.value }))} style={inputStyle}>
+              <option value="">Select type...</option>
+              {(cylinderTypes || []).map(ct => <option key={ct.id} value={ct.id}>{ct.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Delivered</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="number" min="0" value={form.delivered} onChange={e => setForm(p => ({ ...p, delivered: parseInt(e.target.value) || 0 }))} style={{ ...inputStyle, flex: 1 }} />
+              <span style={{ fontSize: 20, color: C.green, fontWeight: 800 }}>↓</span>
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Returned</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="number" min="0" value={form.returned} onChange={e => setForm(p => ({ ...p, returned: parseInt(e.target.value) || 0 }))} style={{ ...inputStyle, flex: 1 }} />
+              <span style={{ fontSize: 20, color: C.red, fontWeight: 800 }}>↑</span>
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Date</label>
+            <input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Notes (docket/PO)</label>
+            <input value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} style={inputStyle} />
+          </div>
+        </div>
+
+        {/* Summary preview */}
+        {(form.delivered > 0 || form.returned > 0) && (
+          <div style={{ marginTop: 12, padding: "8px 12px", background: C.input, borderRadius: 6, fontSize: 13, display: "flex", gap: 16 }}>
+            {form.delivered > 0 && <span style={{ color: C.green, fontWeight: 600 }}>↓ {form.delivered} delivery</span>}
+            {form.returned > 0 && <span style={{ color: C.red, fontWeight: 600 }}>↑ {form.returned} return</span>}
+            <span style={{ color: C.muted }}>Net: {form.delivered - form.returned}</span>
+          </div>
+        )}
+
+        <button
+          onClick={submit}
+          disabled={!form.customer_id || !form.cylinder_type || (form.delivered === 0 && form.returned === 0)}
+          style={{ ...btnStyle(C.accent), marginTop: 16, width: "100%" }}
+        >
+          Record Transaction
+        </button>
+      </Card>
+    </div>
+  );
+}
+
+// ==================== TRACKING VIEW ====================
+function TrackingView({ customers, cylinderTypes }) {
+  const [filter, setFilter] = useState("");
+  const onHand = useApi(() => api.getOnHand());
+  const txs = useApi(() => api.getTransactions(filter ? { customer_id: filter, limit: 50 } : { limit: 50 }), [filter]);
+
+  const customerMap = useMemo(() => {
+    const m = {}; (customers || []).forEach(c => m[c.id] = c); return m;
+  }, [customers]);
+  const ctMap = useMemo(() => {
+    const m = {}; (cylinderTypes || []).forEach(ct => m[ct.id] = ct); return m;
+  }, [cylinderTypes]);
+
+  return (
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Cylinder Tracking</h2>
+      <select value={filter} onChange={e => setFilter(e.target.value)} style={{ ...inputStyle, maxWidth: 300, marginBottom: 16 }}>
+        <option value="">All customers</option>
+        {(customers || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
+
+      <Card>
+        <div style={{ fontWeight: 700, marginBottom: 12 }}>On-Hand Summary</div>
+        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+            {["Customer", "Cylinder Type", "On-Hand"].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {(onHand.data || []).filter(r => !filter || r.customer_id === filter).map((r, i) => (
+              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <td style={{ padding: "6px 8px" }}>{customerMap[r.customer_id]?.name || r.customer_id}</td>
+                <td style={{ padding: "6px 8px" }}>{ctMap[r.cylinder_type]?.label || r.cylinder_type}</td>
+                <td style={{ padding: "6px 8px", fontWeight: 700, color: r.on_hand > 0 ? C.accent : C.green }}>{r.on_hand}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      <Card>
+        <div style={{ fontWeight: 700, marginBottom: 12 }}>Transaction History</div>
+        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+            {["Date", "Customer", "Type", "Cylinder", "Qty", "Source", "Notes"].map(h => <th key={h} style={{ textAlign: "left", padding: "4px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {(txs.data || []).map(tx => (
+              <tr key={tx.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <td style={{ padding: "4px 8px" }}>{tx.date}</td>
+                <td style={{ padding: "4px 8px" }}>{customerMap[tx.customer_id]?.name || "?"}</td>
+                <td style={{ padding: "4px 8px" }}>
+                  <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: tx.type === "delivery" ? "#22c55e22" : "#ef444422", color: tx.type === "delivery" ? C.green : C.red }}>{tx.type}</span>
+                </td>
+                <td style={{ padding: "4px 8px" }}>{ctMap[tx.cylinder_type]?.label || "?"}</td>
+                <td style={{ padding: "4px 8px", fontWeight: 600 }}>{tx.qty}</td>
+                <td style={{ padding: "4px 8px" }}>
+                  {tx.source === "optimoroute" ? <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#8b5cf622", color: C.purple }}>OR</span> : <span style={{ color: C.muted, fontSize: 11 }}>manual</span>}
+                </td>
+                <td style={{ padding: "4px 8px", color: C.muted, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.notes}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+// ==================== BILLING VIEW ====================
+function BillingView({ customers, cylinderTypes }) {
+  const [mode, setMode] = useState("month"); // month | range
+  const [month, setMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
+  const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; });
+  const [dateTo, setDateTo] = useState(() => new Date().toISOString().split("T")[0]);
+  const [filterCustomer, setFilterCustomer] = useState("");
+  const [sortBy, setSortBy] = useState("name"); // name | address
+
+  const params = mode === "month"
+    ? { month, ...(filterCustomer ? { customer_id: filterCustomer } : {}) }
+    : { from: dateFrom, to: dateTo, ...(filterCustomer ? { customer_id: filterCustomer } : {}) };
+  const billing = useApi(() => api.getBilling(params), [mode, month, dateFrom, dateTo, filterCustomer]);
+
+  const sortedBills = useMemo(() => {
+    if (!billing.data?.bills) return [];
+    return [...billing.data.bills].sort((a, b) => {
+      if (sortBy === "address") return (a.customer.address || "").localeCompare(b.customer.address || "");
+      return a.customer.name.localeCompare(b.customer.name);
+    });
+  }, [billing.data, sortBy]);
+
+  const BillTable = ({ lines, label, color }) => {
+    if (!lines?.length) return null;
+    return (
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>{label}</div>
+        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+            {["Item", "Qty", "Unit Price", "Total"].map(h => <th key={h} style={{ textAlign: "left", padding: "4px 8px", color: C.muted }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {lines.map(l => (
+              <tr key={l.cylinder_type} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <td style={{ padding: "4px 8px" }}>{l.label}</td>
+                <td style={{ padding: "4px 8px" }}>{l.qty}</td>
+                <td style={{ padding: "4px 8px" }}>{fmtCurrency(l.unit_price)}</td>
+                <td style={{ padding: "4px 8px", fontWeight: 600 }}>{fmtCurrency(l.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     );
-  }
+  };
 
-  return <MainApp user={user} onLogout={handleLogout} />;
+  return (
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Billing</h2>
+
+      {/* Controls */}
+      <Card>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 12 }}>
+          <div>
+            <label style={labelStyle}>Period</label>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={() => setMode("month")} style={{ ...btnStyle(mode === "month" ? C.accent : C.muted), padding: "6px 12px", fontSize: 12 }}>Month</button>
+              <button onClick={() => setMode("range")} style={{ ...btnStyle(mode === "range" ? C.accent : C.muted), padding: "6px 12px", fontSize: 12 }}>Date Range</button>
+            </div>
+          </div>
+          {mode === "month" ? (
+            <div><label style={labelStyle}>Month</label><input type="month" value={month} onChange={e => setMonth(e.target.value)} style={{ ...inputStyle, width: 180 }} /></div>
+          ) : (
+            <>
+              <div><label style={labelStyle}>From</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ ...inputStyle, width: 160 }} /></div>
+              <div><label style={labelStyle}>To</label><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ ...inputStyle, width: 160 }} /></div>
+            </>
+          )}
+          <div>
+            <label style={labelStyle}>Customer</label>
+            <select value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)} style={{ ...inputStyle, width: 220 }}>
+              <option value="">All customers</option>
+              {(customers || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Sort By</label>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={() => setSortBy("name")} style={{ ...btnStyle(sortBy === "name" ? C.blue : C.muted), padding: "6px 12px", fontSize: 12 }}>Name</button>
+              <button onClick={() => setSortBy("address")} style={{ ...btnStyle(sortBy === "address" ? C.blue : C.muted), padding: "6px 12px", fontSize: 12 }}>Address</button>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {billing.data && (
+        <>
+          {/* Grand totals */}
+          <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+            <StatCard label="Rental Total" value={fmtCurrency(billing.data.grand_rental)} color={C.accent} />
+            <StatCard label="Sales Total" value={fmtCurrency(billing.data.grand_sales)} color={C.blue} />
+            <StatCard label="Grand Total" value={fmtCurrency(billing.data.grand_total)} color={C.green} />
+          </div>
+
+          {/* Per-customer bills */}
+          {sortedBills.map(b => (
+            <Card key={b.customer.id}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{b.customer.name}</div>
+                  {b.customer.address && <div style={{ fontSize: 12, color: C.muted }}>{b.customer.address}</div>}
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontWeight: 800, fontSize: 18, color: C.green }}>{fmtCurrency(b.total)}</div>
+                </div>
+              </div>
+              <BillTable lines={b.rentalLines} label="Rental" color={C.accent} />
+              {b.rentalLines?.length > 0 && <div style={{ textAlign: "right", fontSize: 12, fontWeight: 600, color: C.accent, marginBottom: 8 }}>Rental subtotal: {fmtCurrency(b.rentalTotal)}</div>}
+              <BillTable lines={b.saleLines} label="Sales" color={C.blue} />
+              {b.saleLines?.length > 0 && <div style={{ textAlign: "right", fontSize: 12, fontWeight: 600, color: C.blue }}>Sales subtotal: {fmtCurrency(b.salesTotal)}</div>}
+            </Card>
+          ))}
+          {sortedBills.length === 0 && <div style={{ textAlign: "center", padding: 32, color: C.muted }}>No billing data for this period</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ==================== PRICING VIEW (simplified) ====================
+function PricingView({ customers, cylinderTypes, showToast }) {
+  const pricing = useApi(() => api.getPricing());
+  const [mode, setMode] = useState("fixed");
+  const [selCT, setSelCT] = useState("");
+  const [price, setPrice] = useState("");
+  const [pct, setPct] = useState("");
+  const [selCustomers, setSelCustomers] = useState([]);
+
+  const apply = async () => {
+    try {
+      const data = { cylinder_type: selCT, customer_ids: selCustomers };
+      if (mode === "percentage") { data.mode = "percentage"; data.percentage = parseFloat(pct); }
+      else { data.price = parseFloat(price); }
+      await api.bulkPrice(data);
+      pricing.reload();
+      showToast("Pricing updated");
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  const toggleAll = () => {
+    if (selCustomers.length === (customers || []).length) setSelCustomers([]);
+    else setSelCustomers((customers || []).map(c => c.id));
+  };
+
+  return (
+    <div>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Pricing Manager</h2>
+      <Card>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button onClick={() => setMode("fixed")} style={btnStyle(mode === "fixed" ? C.accent : C.muted)}>Set Fixed Price</button>
+          <button onClick={() => setMode("percentage")} style={btnStyle(mode === "percentage" ? C.accent : C.muted)}>% Increase</button>
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
+          <div>
+            <label style={labelStyle}>Cylinder Type</label>
+            <select value={selCT} onChange={e => setSelCT(e.target.value)} style={{ ...inputStyle, width: 200 }}>
+              <option value="">Select...</option>
+              {(cylinderTypes || []).map(ct => <option key={ct.id} value={ct.id}>{ct.label}</option>)}
+            </select>
+          </div>
+          {mode === "fixed" ? (
+            <div><label style={labelStyle}>New Price</label><input type="number" step="0.01" value={price} onChange={e => setPrice(e.target.value)} style={{ ...inputStyle, width: 120 }} /></div>
+          ) : (
+            <div><label style={labelStyle}>Increase %</label><input type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} style={{ ...inputStyle, width: 120 }} /></div>
+          )}
+          <button onClick={apply} disabled={!selCT || selCustomers.length === 0} style={btnStyle(C.green)}>Apply</button>
+        </div>
+        <div style={{ fontSize: 12, marginBottom: 8 }}>
+          <button onClick={toggleAll} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 12 }}>
+            {selCustomers.length === (customers || []).length ? "Deselect All" : "Select All"}
+          </button> · {selCustomers.length} selected
+        </div>
+        <div style={{ maxHeight: 200, overflowY: "auto", border: `1px solid ${C.border}`, borderRadius: 6 }}>
+          {(customers || []).map(c => (
+            <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", cursor: "pointer", borderBottom: `1px solid ${C.border}` }}>
+              <input type="checkbox" checked={selCustomers.includes(c.id)} onChange={() => setSelCustomers(s => s.includes(c.id) ? s.filter(x => x !== c.id) : [...s, c.id])} />
+              <span style={{ fontSize: 12 }}>{c.name}</span>
+            </label>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ==================== USERS VIEW ====================
+function UsersView({ showToast }) {
+  const users = useApi(() => api.getUsers());
+  const [form, setForm] = useState({ username: "", password: "", role: "user" });
+  const [adding, setAdding] = useState(false);
+
+  const addUser = async () => {
+    try {
+      await api.addUser(form.username, form.password, form.role);
+      users.reload();
+      setForm({ username: "", password: "", role: "user" });
+      setAdding(false);
+      showToast("User added");
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700 }}>Manage Users</h2>
+        <button onClick={() => setAdding(!adding)} style={btnStyle()}>{adding ? "Cancel" : "+ Add User"}</button>
+      </div>
+      {adding && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 12 }}>
+            <input placeholder="Username" value={form.username} onChange={e => setForm(p => ({ ...p, username: e.target.value }))} style={inputStyle} />
+            <input placeholder="Password" type="password" value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} style={inputStyle} />
+            <select value={form.role} onChange={e => setForm(p => ({ ...p, role: e.target.value }))} style={{ ...inputStyle, width: 120 }}>
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button onClick={addUser} style={btnStyle(C.green)}>Add</button>
+          </div>
+        </Card>
+      )}
+      <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+        <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+          {["Username", "Role", "Created"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px", color: C.muted }}>{h}</th>)}
+        </tr></thead>
+        <tbody>
+          {(users.data || []).map(u => (
+            <tr key={u.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+              <td style={{ padding: "8px", fontWeight: 600 }}>{u.username}</td>
+              <td style={{ padding: "8px" }}><span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: u.role === "admin" ? "#f59e0b22" : "#3b82f622", color: u.role === "admin" ? C.accent : C.blue }}>{u.role}</span></td>
+              <td style={{ padding: "8px", color: C.muted }}>{u.created}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // ==================== MAIN APP ====================
-function MainApp({ user, onLogout }) {
+export default function App() {
+  const [authState, setAuthState] = useState("loading"); // loading | setup | login | app
+  const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
   const [toast, setToast] = useState(null);
+  const [globalSearch, setGlobalSearch] = useState("");
 
-  // Global data caches
   const customers = useApi(() => api.getCustomers());
   const cylinderTypes = useApi(() => api.getCylinderTypes());
-  const pricing = useApi(() => api.getPricing());
+  const stats = useApi(() => api.getStats());
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
@@ -264,8 +1257,28 @@ function MainApp({ user, onLogout }) {
   const refreshAll = () => {
     customers.reload();
     cylinderTypes.reload();
-    pricing.reload();
+    stats.reload();
   };
+
+  // Check auth on mount
+  useEffect(() => {
+    setAuthFailHandler(() => setAuthState("login"));
+    api.authStatus().then(r => {
+      if (r.needsSetup) setAuthState("setup");
+      else if (r.user) { setUser(r.user); setAuthState("app"); }
+      else setAuthState("login");
+    }).catch(() => setAuthState("login"));
+  }, []);
+
+  const logout = async () => {
+    await api.logout();
+    setUser(null);
+    setAuthState("login");
+  };
+
+  if (authState === "loading") return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: C.bg, color: C.muted }}>Loading...</div>;
+  if (authState === "setup") return <SetupScreen onDone={u => { setUser(u); setAuthState("app"); }} />;
+  if (authState === "login") return <LoginScreen onDone={u => { setUser(u); setAuthState("app"); }} />;
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.dashboard },
@@ -275,790 +1288,85 @@ function MainApp({ user, onLogout }) {
     { id: "tracking", label: "Cylinder Tracking", icon: Icons.cylinders },
     { id: "billing", label: "Monthly Billing", icon: Icons.billing },
     { id: "pricing", label: "Pricing Manager", icon: Icons.pricing },
+    { id: "optimoroute", label: "OptimoRoute", icon: Icons.sync },
+    { id: "users", label: "Manage Users", icon: Icons.users },
   ];
-  if (user?.role === "admin") {
-    navItems.push({ id: "users", label: "Manage Users", icon: Icons.customers });
-  }
 
-  const loading = customers.loading || cylinderTypes.loading;
+  const renderView = () => {
+    switch (view) {
+      case "dashboard": return <DashboardView stats={stats.data} />;
+      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} />;
+      case "cylindertypes": return <CylinderTypesView cylinderTypes={cylinderTypes.data} reload={cylinderTypes.reload} showToast={showToast} />;
+      case "delivery": return <DeliveryView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} refreshAll={refreshAll} />;
+      case "tracking": return <TrackingView customers={customers.data} cylinderTypes={cylinderTypes.data} />;
+      case "billing": return <BillingView customers={customers.data} cylinderTypes={cylinderTypes.data} />;
+      case "pricing": return <PricingView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} />;
+      case "optimoroute": return <OptimoRouteView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} refreshAll={refreshAll} />;
+      case "users": return <UsersView showToast={showToast} />;
+      default: return null;
+    }
+  };
 
   return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: "#0f1117", color: "#e2e4ea" }}>
+    <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: C.bg, color: C.text }}>
       {/* SIDEBAR */}
-      <nav style={{ width: 240, background: "#161820", borderRight: "1px solid #23262f", display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ padding: "24px 20px 20px", borderBottom: "1px solid #23262f" }}>
+      <nav style={{ width: 240, background: C.panel, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ padding: "24px 20px 20px", borderBottom: `1px solid ${C.border}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #f59e0b, #ef4444)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#fff" }}>GC</div>
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #f59e0b, #ef4444)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#fff" }}>CT</div>
             <div>
               <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.02em" }}>CylinderTrack</div>
-              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1 }}>Gas Rental Manager</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>Gas Rental Manager</div>
             </div>
           </div>
         </div>
-        <div style={{ padding: "12px 8px", flex: 1 }}>
+
+        {/* Search */}
+        <div style={{ padding: "12px 12px 4px" }}>
+          <input placeholder="Search..." value={globalSearch} onChange={e => setGlobalSearch(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "6px 10px" }} />
+        </div>
+
+        <div style={{ padding: "4px 8px", flex: 1, overflowY: "auto" }}>
           {navItems.map(item => {
             const active = view === item.id;
             return (
               <button key={item.id} onClick={() => setView(item.id)} style={{
                 display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 12px", marginBottom: 2,
                 background: active ? "#23262f" : "transparent", border: "none", borderRadius: 8, cursor: "pointer",
-                color: active ? "#f59e0b" : "#9ca3af", fontSize: 13, fontWeight: active ? 600 : 400, transition: "all 0.15s",
-                fontFamily: "inherit",
+                color: active ? C.accent : "#9ca3af", fontSize: 13, fontWeight: active ? 700 : 500, transition: "all 0.15s",
               }}>
-                <Icon d={item.icon} size={17} color={active ? "#f59e0b" : "#6b7280"} />
-                {item.label}
+                {item.icon} {item.label}
+                {item.id === "optimoroute" && <span style={{ marginLeft: "auto", fontSize: 9, padding: "2px 5px", borderRadius: 4, background: "#8b5cf622", color: C.purple, fontWeight: 700 }}>API</span>}
               </button>
             );
           })}
         </div>
-        <div style={{ padding: "16px 20px", borderTop: "1px solid #23262f" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <div style={{ width: 28, height: 28, borderRadius: 7, background: "#23262f", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#f59e0b" }}>{user?.username?.[0]?.toUpperCase() || "?"}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "#d1d5db", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user?.username}</div>
-              <div style={{ fontSize: 10, color: "#4b5563" }}>{user?.role}</div>
-            </div>
+
+        {/* User info */}
+        <div style={{ padding: "12px 16px", borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{user?.username}</div>
+            <div style={{ fontSize: 10, color: C.muted }}>{user?.role}</div>
           </div>
-          <button onClick={onLogout} style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid #23262f", background: "transparent", color: "#9ca3af", fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 500 }}>Sign Out</button>
+          <button onClick={logout} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 11 }}>Sign out</button>
         </div>
       </nav>
 
       {/* MAIN CONTENT */}
-      <main style={{ flex: 1, overflow: "auto", padding: "28px 36px" }}>
-        {loading ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "50vh", color: "#6b7280" }}>Loading...</div>
-        ) : (
-          <>
-            {view === "dashboard" && <DashboardView cylinderTypes={cylinderTypes.data || []} />}
-            {view === "customers" && <CustomersView customers={customers.data || []} reload={customers.reload} showToast={showToast} />}
-            {view === "cylindertypes" && <CylinderTypesView cylinderTypes={cylinderTypes.data || []} reload={cylinderTypes.reload} showToast={showToast} />}
-            {view === "delivery" && <DeliveryView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} />}
-            {view === "tracking" && <TrackingView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} />}
-            {view === "billing" && <BillingView />}
-            {view === "pricing" && <PricingView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} pricing={pricing.data || []} reloadPricing={pricing.reload} showToast={showToast} />}
-            {view === "users" && user?.role === "admin" && <UsersView showToast={showToast} />}
-          </>
-        )}
+      <main style={{ flex: 1, overflowY: "auto", padding: 32 }}>
+        {renderView()}
       </main>
 
       {/* TOAST */}
       {toast && (
         <div style={{
-          position: "fixed", bottom: 24, right: 24, padding: "12px 20px", borderRadius: 10,
-          background: toast.type === "success" ? "#16a34a" : "#dc2626", color: "#fff",
-          fontSize: 13, fontWeight: 600, boxShadow: "0 8px 24px rgba(0,0,0,0.4)", animation: "fadeIn 0.2s", fontFamily: "inherit",
-        }}>{toast.msg}</div>
-      )}
-
-      <style>{`
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #23262f; border-radius: 3px; }
-        input, select, textarea { font-family: 'DM Sans', sans-serif; }
-      `}</style>
-    </div>
-  );
-}
-
-// ==================== MANAGE USERS (admin only) ====================
-function UsersView({ showToast }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [role, setRole] = useState("user");
-  const [curPw, setCurPw] = useState("");
-  const [newPw, setNewPw] = useState("");
-
-  const addUser = async () => {
-    if (!username.trim() || !password) return;
-    try {
-      await api.addUser(username.trim(), password, role);
-      showToast(`User "${username.trim()}" created`);
-      setUsername(""); setPassword("");
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const changePw = async () => {
-    if (!curPw || !newPw) return;
-    try {
-      await api.changePassword(curPw, newPw);
-      showToast("Password changed");
-      setCurPw(""); setNewPw("");
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const exportBackup = async () => {
-    try {
-      const backup = await api.downloadBackup();
-      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `cylindertrack-backup-${new Date().toISOString().split("T")[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast("Backup downloaded");
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const importBackup = () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const backup = JSON.parse(text);
-        if (!backup.data) { showToast("Invalid backup file", "error"); return; }
-        if (!confirm("This will replace ALL existing data with the backup. Are you sure?")) return;
-        await api.restoreBackup(backup.data);
-        showToast("Data restored successfully — refresh the page");
-      } catch (e) { showToast(e.message, "error"); }
-    };
-    input.click();
-  };
-
-  return (
-    <div>
-      <PageTitle title="Manage Users & Backups" subtitle="Add colleagues, change passwords, and backup your data" />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, maxWidth: 800 }}>
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 16 }}>Add New User</h3>
-          <Input label="Username" value={username} onChange={e => setUsername(e.target.value)} placeholder="e.g. john" />
-          <Input label="Password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Minimum 4 characters" />
-          <Select label="Role" value={role} onChange={e => setRole(e.target.value)}>
-            <option value="user">User — can view and edit data</option>
-            <option value="admin">Admin — can also manage users</option>
-          </Select>
-          <Btn onClick={addUser} disabled={!username.trim() || !password}><Icon d={Icons.plus} size={15} /> Create User</Btn>
-        </Card>
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 16 }}>Change Your Password</h3>
-          <Input label="Current Password" type="password" value={curPw} onChange={e => setCurPw(e.target.value)} />
-          <Input label="New Password" type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Minimum 4 characters" />
-          <Btn onClick={changePw} disabled={!curPw || !newPw}>Change Password</Btn>
-        </Card>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, maxWidth: 800, marginTop: 24 }}>
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Export Backup</h3>
-          <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 16, lineHeight: 1.5 }}>Download all customers, cylinder types, transactions, and pricing as a JSON file. Do this regularly to keep a copy of your data.</p>
-          <Btn onClick={exportBackup}>Download Backup</Btn>
-        </Card>
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Restore from Backup</h3>
-          <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 16, lineHeight: 1.5 }}>Upload a previously exported JSON backup file. This will replace all existing data.</p>
-          <Btn variant="danger" onClick={importBackup}>Restore from File</Btn>
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-// ==================== DASHBOARD ====================
-function DashboardView({ cylinderTypes }) {
-  const { data: stats, loading } = useApi(() => api.getStats());
-  if (loading || !stats) return <div style={{ color: "#6b7280" }}>Loading dashboard...</div>;
-
-  const txColors = { delivery: STATUS_COLORS.delivered, return: STATUS_COLORS.returned, sale: "#8b5cf6" };
-
-  return (
-    <div>
-      <PageTitle title="Dashboard" subtitle="Overview of your cylinder rental operations" />
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 28 }}>
-        <StatCard label="Active Customers" value={stats.total_customers} accent="#2563eb" />
-        <StatCard label="Cylinders On-Hand" value={stats.total_on_hand} accent="#f59e0b" />
-        <StatCard label="Total Deliveries" value={stats.total_deliveries} accent="#16a34a" />
-        <StatCard label="Total Returns" value={stats.total_returns} accent="#8b5cf6" />
-        <StatCard label="Total Sales" value={stats.total_sales} accent="#ef4444" />
-      </div>
-      <Card>
-        <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>Recent Transactions</h3>
-        <Table
-          columns={[
-            { label: "Date", render: r => fmtDate(r.date) },
-            { label: "Customer", key: "customer_name" },
-            { label: "Type", render: r => <Badge label={r.type.toUpperCase()} color={txColors[r.type] || "#6b7280"} /> },
-            { label: "Item", render: r => cylinderTypes.find(c => c.id === r.cylinder_type)?.label || r.cylinder_type },
-            { label: "Qty", key: "qty", align: "right" },
-          ]}
-          data={stats.recent_transactions || []}
-          emptyMsg="No transactions yet"
-        />
-      </Card>
-    </div>
-  );
-}
-
-// ==================== CUSTOMERS ====================
-function CustomersView({ customers, reload, showToast }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [editId, setEditId] = useState(null);
-  const [search, setSearch] = useState("");
-  const [form, setForm] = useState({ name: "", contact: "", phone: "", email: "", address: "", notes: "" });
-
-  const filtered = customers.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
-
-  const openAdd = () => { setForm({ name: "", contact: "", phone: "", email: "", address: "", notes: "" }); setShowAdd(true); };
-  const openEdit = (c) => { setForm({ ...c }); setEditId(c.id); };
-
-  const save = async () => {
-    if (!form.name.trim()) return;
-    try {
-      if (editId) {
-        await api.updateCustomer(editId, form);
-        setEditId(null);
-        showToast("Customer updated");
-      } else {
-        await api.createCustomer(form);
-        setShowAdd(false);
-        showToast("Customer added");
-      }
-      reload();
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const remove = async (id) => {
-    if (!confirm("Delete this customer?")) return;
-    try {
-      await api.deleteCustomer(id);
-      reload();
-      showToast("Customer deleted", "error");
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const formModal = (title, onClose) => (
-    <Modal title={title} onClose={onClose}>
-      <Input label="Company Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Smith Welding Pty Ltd" />
-      <Input label="Contact Person" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} placeholder="e.g. John Smith" />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Input label="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="04xx xxx xxx" />
-        <Input label="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="john@example.com" />
-      </div>
-      <Input label="Delivery Address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
-      <Input label="Notes" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
-      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-        <Btn onClick={save}><Icon d={Icons.check} size={15} /> Save</Btn>
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-      </div>
-    </Modal>
-  );
-
-  return (
-    <div>
-      <PageTitle title="Customers" subtitle="Manage your gas rental customer accounts" />
-      <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
-        <div style={{ flex: 1 }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search customers..."
-            style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #23262f", background: "#0f1117", color: "#e2e4ea", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+          position: "fixed", bottom: 24, right: 24, padding: "12px 20px", borderRadius: 8,
+          background: toast.type === "error" ? C.red : C.green, color: "#fff", fontWeight: 600, fontSize: 13,
+          boxShadow: "0 4px 12px rgba(0,0,0,0.3)", zIndex: 1000,
+        }}>
+          {toast.msg}
         </div>
-        <Btn onClick={openAdd}><Icon d={Icons.plus} size={15} /> Add Customer</Btn>
-      </div>
-      <Card>
-        <Table
-          columns={[
-            { label: "Company", render: r => <span style={{ fontWeight: 600 }}>{r.name}</span> },
-            { label: "Contact", key: "contact" },
-            { label: "Phone", key: "phone" },
-            { label: "Email", key: "email" },
-            { label: "Actions", align: "right", render: r => (
-              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                <Btn variant="ghost" style={{ padding: "4px 8px" }} onClick={() => openEdit(r)}><Icon d={Icons.edit} size={14} /></Btn>
-                <Btn variant="danger" style={{ padding: "4px 8px" }} onClick={() => remove(r.id)}><Icon d={Icons.x} size={14} /></Btn>
-              </div>
-            )}
-          ]}
-          data={filtered}
-          emptyMsg="No customers yet"
-        />
-      </Card>
-      {showAdd && formModal("Add Customer", () => setShowAdd(false))}
-      {editId && formModal("Edit Customer", () => setEditId(null))}
-    </div>
-  );
-}
-
-// ==================== CYLINDER TYPES ====================
-function CylinderTypesView({ cylinderTypes, reload, showToast }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ label: "", default_price: "", gas_group: "", item_type: "cylinder" });
-  const GAS_GROUPS = ["Oxygen", "Acetylene", "Argon", "CO₂", "Nitrogen", "LPG", "Helium", "Hydrogen", "Mixed Gas", "Other"];
-
-  const openAdd = () => { setForm({ label: "", default_price: "", gas_group: "", item_type: "cylinder" }); setShowAdd(true); };
-  const openEdit = (ct) => { setForm({ label: ct.label, default_price: ct.default_price, gas_group: ct.gas_group || "", item_type: ct.item_type || "cylinder" }); setEditId(ct.id); };
-
-  const save = async () => {
-    if (!form.label.trim() || !form.default_price) return;
-    try {
-      if (editId) {
-        await api.updateCylinderType(editId, form);
-        setEditId(null);
-        showToast("Item updated");
-      } else {
-        await api.createCylinderType(form);
-        setShowAdd(false);
-        showToast(`${form.item_type === "service" ? "Service" : "Cylinder"} added`);
-      }
-      reload();
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const remove = async (id) => {
-    if (!confirm("Delete this item?")) return;
-    try {
-      await api.deleteCylinderType(id);
-      reload();
-      showToast("Item deleted", "error");
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const cylinders = cylinderTypes.filter(ct => (ct.item_type || "cylinder") === "cylinder");
-  const services = cylinderTypes.filter(ct => ct.item_type === "service");
-
-  const formModal = (title, onClose) => (
-    <Modal title={title} onClose={onClose}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {[{ key: "cylinder", label: "Cylinder", desc: "Tracked — on-hand & returns" }, { key: "service", label: "Service", desc: "Not tracked — billed per sale" }].map(t => (
-          <button key={t.key} onClick={() => setForm({ ...form, item_type: t.key })} style={{
-            flex: 1, padding: "10px 12px", borderRadius: 8, textAlign: "left",
-            border: `2px solid ${form.item_type === t.key ? (t.key === "cylinder" ? "#2563eb" : "#8b5cf6") : "#23262f"}`,
-            background: form.item_type === t.key ? (t.key === "cylinder" ? "#2563eb12" : "#8b5cf612") : "transparent",
-            cursor: "pointer", fontFamily: "inherit",
-          }}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: form.item_type === t.key ? (t.key === "cylinder" ? "#60a5fa" : "#a78bfa") : "#9ca3af" }}>{t.label}</div>
-            <div style={{ fontSize: 11, marginTop: 2, color: "#6b7280" }}>{t.desc}</div>
-          </button>
-        ))}
-      </div>
-      <Input label="Name" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} />
-      <Select label="Gas Group" value={form.gas_group} onChange={e => setForm({ ...form, gas_group: e.target.value })}>
-        <option value="">No group</option>
-        {GAS_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
-      </Select>
-      <Input label={form.item_type === "service" ? "Default Price per Sale ($)" : "Default Monthly Rental ($)"} type="number" step="0.01" min="0" value={form.default_price} onChange={e => setForm({ ...form, default_price: e.target.value })} />
-      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-        <Btn onClick={save} disabled={!form.label.trim() || !form.default_price}><Icon d={Icons.check} size={15} /> Save</Btn>
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-      </div>
-    </Modal>
-  );
-
-  const typeTable = (data, label, priceLabel, badgeColor) => (
-    <Card style={{ marginBottom: 20 }}>
-      <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
-        <Badge label={label === "Cylinders" ? "TRACKED" : "NOT TRACKED"} color={badgeColor} /> {label}
-      </h3>
-      <Table
-        columns={[
-          { label: "Name", render: r => <span style={{ fontWeight: 600 }}>{r.label}</span> },
-          { label: "Gas Group", render: r => r.gas_group ? <Badge label={r.gas_group} color="#6366f1" /> : <span style={{ color: "#4b5563" }}>—</span> },
-          { label: priceLabel, align: "right", render: r => <span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "#f59e0b" }}>{fmtCurrency(r.default_price)}</span> },
-          { label: "Actions", align: "right", render: r => (
-            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-              <Btn variant="ghost" style={{ padding: "4px 8px" }} onClick={() => openEdit(r)}><Icon d={Icons.edit} size={14} /></Btn>
-              <Btn variant="danger" style={{ padding: "4px 8px" }} onClick={() => remove(r.id)}><Icon d={Icons.x} size={14} /></Btn>
-            </div>
-          )}
-        ]}
-        data={data}
-        emptyMsg={`No ${label.toLowerCase()} configured`}
-      />
-    </Card>
-  );
-
-  return (
-    <div>
-      <PageTitle title="Cylinder Types & Services" subtitle="Manage tracked cylinders and non-tracked service items" />
-      <div style={{ marginBottom: 20 }}><Btn onClick={openAdd}><Icon d={Icons.plus} size={15} /> Add Item</Btn></div>
-      {typeTable(cylinders, "Cylinders", "Default Rental / Month", "#2563eb")}
-      {typeTable(services, "Services", "Default Price / Sale", "#8b5cf6")}
-      {showAdd && formModal("Add Item", () => setShowAdd(false))}
-      {editId && formModal("Edit Item", () => setEditId(null))}
-    </div>
-  );
-}
-
-// ==================== DELIVERY / RETURN ====================
-function DeliveryView({ customers, cylinderTypes, showToast }) {
-  const [form, setForm] = useState({ customer_id: "", cylinder_type: "", qty: 1, type: "delivery", date: today(), notes: "" });
-  const { data: recentTx, reload } = useApi(() => api.getTransactions({ limit: 15 }));
-
-  const selectedType = cylinderTypes.find(ct => ct.id === form.cylinder_type);
-  const isService = selectedType?.item_type === "service";
-
-  const handleTypeChange = (typeId) => {
-    const ct = cylinderTypes.find(c => c.id === typeId);
-    setForm({ ...form, cylinder_type: typeId, type: ct?.item_type === "service" ? "sale" : (form.type === "sale" ? "delivery" : form.type) });
-  };
-
-  const submit = async () => {
-    if (!form.customer_id || !form.cylinder_type || form.qty < 1) return;
-    try {
-      await api.createTransaction(form);
-      const label = isService ? "Sale" : (form.type === "delivery" ? "Delivery" : "Return");
-      showToast(`${label} recorded — ${form.qty} × ${selectedType?.label}`);
-      setForm({ ...form, qty: 1, notes: "" });
-      reload();
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const txColors = { delivery: STATUS_COLORS.delivered, return: STATUS_COLORS.returned, sale: "#8b5cf6" };
-
-  return (
-    <div>
-      <PageTitle title="Deliver / Return / Sell" subtitle="Record cylinder movements and service sales" />
-      <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 24 }}>
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 16 }}>New Transaction</h3>
-          <Select label="Customer" value={form.customer_id} onChange={e => setForm({ ...form, customer_id: e.target.value })}>
-            <option value="">Select customer...</option>
-            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </Select>
-          <Select label="Item" value={form.cylinder_type} onChange={e => handleTypeChange(e.target.value)}>
-            <option value="">Select item...</option>
-            <optgroup label="Cylinders (tracked)">
-              {cylinderTypes.filter(ct => (ct.item_type || "cylinder") === "cylinder").map(ct => <option key={ct.id} value={ct.id}>{ct.label}</option>)}
-            </optgroup>
-            <optgroup label="Services (not tracked)">
-              {cylinderTypes.filter(ct => ct.item_type === "service").map(ct => <option key={ct.id} value={ct.id}>{ct.label}</option>)}
-            </optgroup>
-          </Select>
-          {isService ? (
-            <div style={{ padding: "10px 12px", borderRadius: 8, border: "2px solid #8b5cf6", background: "#8b5cf612", marginBottom: 16, textAlign: "center" }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: "#a78bfa" }}>Sale — no return needed</div>
-            </div>
-          ) : (
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              {["delivery", "return"].map(t => (
-                <button key={t} onClick={() => setForm({ ...form, type: t })} style={{
-                  flex: 1, padding: "10px", borderRadius: 8, border: `2px solid ${form.type === t ? (t === "delivery" ? "#2563eb" : "#16a34a") : "#23262f"}`,
-                  background: form.type === t ? (t === "delivery" ? "#2563eb18" : "#16a34a18") : "transparent",
-                  color: form.type === t ? (t === "delivery" ? "#60a5fa" : "#4ade80") : "#6b7280",
-                  fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
-                }}>
-                  <Icon d={t === "delivery" ? Icons.truck : Icons.undo} size={16} color={form.type === t ? (t === "delivery" ? "#60a5fa" : "#4ade80") : "#6b7280"} />
-                  <div style={{ marginTop: 4 }}>{t === "delivery" ? "Delivery" : "Return"}</div>
-                </button>
-              ))}
-            </div>
-          )}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Input label="Quantity" type="number" min="1" value={form.qty} onChange={e => setForm({ ...form, qty: e.target.value })} />
-            <Input label="Date" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-          </div>
-          <Input label="Notes (optional)" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Docket #, PO #, etc." />
-          <Btn onClick={submit} disabled={!form.customer_id || !form.cylinder_type} style={{ width: "100%", justifyContent: "center", marginTop: 4 }}>
-            <Icon d={Icons.check} size={15} /> Record {isService ? "Sale" : (form.type === "delivery" ? "Delivery" : "Return")}
-          </Btn>
-        </Card>
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>Recent Transactions</h3>
-          <Table
-            columns={[
-              { label: "Date", render: r => fmtDate(r.date) },
-              { label: "Customer", key: "customer_name" },
-              { label: "Type", render: r => <Badge label={r.type.toUpperCase()} color={txColors[r.type] || "#6b7280"} /> },
-              { label: "Item", render: r => cylinderTypes.find(c => c.id === r.cylinder_type)?.label || r.cylinder_type },
-              { label: "Qty", key: "qty", align: "right" },
-              { label: "Notes", key: "notes" },
-            ]}
-            data={recentTx || []}
-            emptyMsg="No transactions recorded yet"
-          />
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-// ==================== TRACKING ====================
-function TrackingView({ customers, cylinderTypes }) {
-  const [filterCustomer, setFilterCustomer] = useState("");
-  const { data: onHand } = useApi(() => api.getOnHand(filterCustomer || undefined), [filterCustomer]);
-  const { data: history } = useApi(
-    () => filterCustomer ? api.getTransactions({ customer_id: filterCustomer, limit: 20 }) : Promise.resolve([]),
-    [filterCustomer]
-  );
-
-  const txColors = { delivery: STATUS_COLORS.delivered, return: STATUS_COLORS.returned, sale: "#8b5cf6" };
-
-  return (
-    <div>
-      <PageTitle title="Cylinder Tracking" subtitle="See what's on-hand at each customer site (excludes services)" />
-      <div style={{ marginBottom: 20, maxWidth: 320 }}>
-        <Select label="Filter by Customer" value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)}>
-          <option value="">All Customers</option>
-          {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </Select>
-      </div>
-      <Card style={{ marginBottom: 24 }}>
-        <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>On-Hand Cylinders</h3>
-        <Table
-          columns={[
-            { label: "Customer", render: r => <span style={{ fontWeight: 600 }}>{r.customer_name}</span> },
-            { label: "Cylinder Type", key: "cylinder_label" },
-            { label: "On-Hand Qty", align: "right", render: r => <span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: r.on_hand > 0 ? "#f59e0b" : "#4b5563" }}>{r.on_hand}</span> },
-            { label: "Status", render: r => <Badge label={r.on_hand > 0 ? "ON SITE" : "CLEAR"} color={r.on_hand > 0 ? STATUS_COLORS.onsite : STATUS_COLORS.returned} /> },
-          ]}
-          data={onHand || []}
-          emptyMsg="No cylinders currently on-hand"
-        />
-      </Card>
-      {filterCustomer && (history || []).length > 0 && (
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>Transaction History</h3>
-          <Table
-            columns={[
-              { label: "Date", render: r => fmtDate(r.date) },
-              { label: "Type", render: r => <Badge label={r.type.toUpperCase()} color={txColors[r.type] || "#6b7280"} /> },
-              { label: "Item", render: r => cylinderTypes.find(c => c.id === r.cylinder_type)?.label || r.cylinder_type },
-              { label: "Qty", key: "qty", align: "right" },
-              { label: "Notes", key: "notes" },
-            ]}
-            data={history || []}
-            emptyMsg="No transactions"
-          />
-        </Card>
       )}
-    </div>
-  );
-}
-
-// ==================== BILLING ====================
-function BillingView() {
-  const [month, setMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
-  const { data: billing, loading } = useApi(() => api.getBilling(month), [month]);
-
-  return (
-    <div>
-      <PageTitle title="Monthly Billing" subtitle="Cylinder rentals (on-hand) + service sales for the selected month" />
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-end", marginBottom: 24 }}>
-        <div>
-          <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, textTransform: "uppercase" }}>Billing Period</label>
-          <input type="month" value={month} onChange={e => setMonth(e.target.value)} style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #23262f", background: "#0f1117", color: "#e2e4ea", fontSize: 13, fontFamily: "inherit" }} />
-        </div>
-        {billing && <StatCard label="Total Billable" value={fmtCurrency(billing.grand_total)} accent="#ef4444" />}
-      </div>
-      {loading && <div style={{ color: "#6b7280" }}>Calculating...</div>}
-      {billing?.customers?.map(c => (
-        <Card key={c.id} style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div>
-              <h3 style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</h3>
-              {c.address && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{c.address}</div>}
-            </div>
-            <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'JetBrains Mono', monospace", color: "#f59e0b" }}>{fmtCurrency(c.total)}</div>
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #23262f" }}>
-                <th style={{ textAlign: "left", padding: "8px 0", color: "#6b7280", fontSize: 11, fontWeight: 600 }}>ITEM</th>
-                <th style={{ textAlign: "center", padding: "8px 0", color: "#6b7280", fontSize: 11, fontWeight: 600 }}>TYPE</th>
-                <th style={{ textAlign: "right", padding: "8px 0", color: "#6b7280", fontSize: 11, fontWeight: 600 }}>QTY</th>
-                <th style={{ textAlign: "right", padding: "8px 0", color: "#6b7280", fontSize: 11, fontWeight: 600 }}>PRICE</th>
-                <th style={{ textAlign: "right", padding: "8px 0", color: "#6b7280", fontSize: 11, fontWeight: 600 }}>TOTAL</th>
-              </tr>
-            </thead>
-            <tbody>
-              {c.lines.map((l, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #1e2130" }}>
-                  <td style={{ padding: "8px 0", color: "#d1d5db" }}>{l.label}</td>
-                  <td style={{ padding: "8px 0", textAlign: "center" }}><Badge label={l.category === "service" ? "SALE" : "RENTAL"} color={l.category === "service" ? "#8b5cf6" : "#2563eb"} /></td>
-                  <td style={{ padding: "8px 0", textAlign: "right", fontFamily: "'JetBrains Mono', monospace" }}>{l.qty}</td>
-                  <td style={{ padding: "8px 0", textAlign: "right", fontFamily: "'JetBrains Mono', monospace" }}>
-                    {fmtCurrency(l.price)}
-                    {l.is_override && <span style={{ fontSize: 9, marginLeft: 4, color: "#f59e0b" }}>●</span>}
-                  </td>
-                  <td style={{ padding: "8px 0", textAlign: "right", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", color: "#f59e0b" }}>{fmtCurrency(l.line_total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      ))}
-      {!loading && (!billing?.customers?.length) && (
-        <Card><p style={{ textAlign: "center", color: "#4b5563", padding: 24 }}>No billable items for this period.</p></Card>
-      )}
-    </div>
-  );
-}
-
-// ==================== PRICING ====================
-function PricingView({ customers, cylinderTypes, pricing, reloadPricing, showToast }) {
-  const [selectedCustomers, setSelectedCustomers] = useState([]);
-  const [selectedType, setSelectedType] = useState("");
-  const [newPrice, setNewPrice] = useState("");
-  const [search, setSearch] = useState("");
-  const [editingCell, setEditingCell] = useState(null);
-  const [cellValue, setCellValue] = useState("");
-
-  const pricingMap = useMemo(() => {
-    const map = {};
-    for (const p of pricing) map[`${p.customer_id}__${p.cylinder_type_id}`] = p.price;
-    return map;
-  }, [pricing]);
-
-  const toggleCustomer = (id) => setSelectedCustomers(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]);
-  const selectAll = () => setSelectedCustomers(customers.map(c => c.id));
-  const selectNone = () => setSelectedCustomers([]);
-
-  const applyBulk = async () => {
-    if (!selectedType || !newPrice || !selectedCustomers.length) return;
-    try {
-      await api.bulkSetPrice(selectedCustomers, selectedType, Number(newPrice));
-      reloadPricing();
-      showToast(`Price updated for ${selectedCustomers.length} customer(s)`);
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const saveCell = async (custId, typeId) => {
-    const val = Number(cellValue);
-    if (!isNaN(val) && val >= 0) {
-      try {
-        await api.setPrice(custId, typeId, val);
-        reloadPricing();
-      } catch (e) { showToast(e.message, "error"); }
-    }
-    setEditingCell(null);
-  };
-
-  const resetCell = async (custId, typeId) => {
-    try {
-      await api.resetPrice(custId, typeId);
-      reloadPricing();
-      showToast("Reset to default");
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const resetAllForCustomer = async (custId) => {
-    try {
-      await api.resetAllPricing(custId);
-      reloadPricing();
-      showToast("All prices reset to default");
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
-  const filteredCustomers = customers.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
-
-  const matrix = customers.map(c => {
-    const prices = {};
-    let hasCustom = false;
-    cylinderTypes.forEach(ct => {
-      const key = `${c.id}__${ct.id}`;
-      const isCustom = pricingMap[key] !== undefined;
-      if (isCustom) hasCustom = true;
-      prices[ct.id] = { value: isCustom ? pricingMap[key] : ct.default_price, isCustom };
-    });
-    return { ...c, prices, hasCustom };
-  });
-
-  return (
-    <div>
-      <PageTitle title="Pricing Manager" subtitle="Set customer-specific pricing — overrides default cylinder rates" />
-      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 24 }}>
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 16 }}>Bulk Price Update</h3>
-          <Select label="Cylinder Type" value={selectedType} onChange={e => setSelectedType(e.target.value)}>
-            <option value="">Select type...</option>
-            {cylinderTypes.map(ct => <option key={ct.id} value={ct.id}>{ct.label} (def: {fmtCurrency(ct.default_price)})</option>)}
-          </Select>
-          <Input label="Override Price" type="number" step="0.01" min="0" value={newPrice} onChange={e => setNewPrice(e.target.value)} placeholder="e.g. 42.50" />
-          <div style={{ marginBottom: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase" }}>Customers ({selectedCustomers.length})</label>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={selectAll} style={{ fontSize: 11, color: "#60a5fa", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>All</button>
-                <button onClick={selectNone} style={{ fontSize: 11, color: "#6b7280", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>None</button>
-              </div>
-            </div>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..."
-              style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #23262f", background: "#0f1117", color: "#e2e4ea", fontSize: 12, outline: "none", fontFamily: "inherit", marginBottom: 8 }} />
-            <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid #23262f", borderRadius: 8, background: "#0f1117" }}>
-              {filteredCustomers.map(c => {
-                const checked = selectedCustomers.includes(c.id);
-                return (
-                  <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", cursor: "pointer", borderBottom: "1px solid #1a1d27", background: checked ? "#23262f" : "transparent" }}>
-                    <input type="checkbox" checked={checked} onChange={() => toggleCustomer(c.id)} style={{ accentColor: "#f59e0b" }} />
-                    <span style={{ fontSize: 12, color: checked ? "#f3f4f6" : "#9ca3af" }}>{c.name}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-          <Btn onClick={applyBulk} disabled={!selectedType || !newPrice || !selectedCustomers.length} style={{ width: "100%", justifyContent: "center", marginTop: 8 }}>
-            Apply to {selectedCustomers.length} Customer{selectedCustomers.length !== 1 ? "s" : ""}
-          </Btn>
-        </Card>
-
-        <Card style={{ overflow: "auto" }}>
-          <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>Pricing Matrix <span style={{ fontSize: 11, fontWeight: 400, color: "#6b7280" }}>— click to edit, right-click to reset</span></h3>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #23262f", color: "#6b7280", fontSize: 10, fontWeight: 600, position: "sticky", left: 0, background: "#1a1d27", zIndex: 1, minWidth: 160 }}>CUSTOMER</th>
-                  {cylinderTypes.map(ct => (
-                    <th key={ct.id} style={{ textAlign: "right", padding: "8px 10px", borderBottom: "1px solid #23262f", color: "#6b7280", fontSize: 10, fontWeight: 600, minWidth: 100, whiteSpace: "nowrap" }}>
-                      {ct.label}
-                      <div style={{ fontSize: 9, fontWeight: 400, color: "#4b5563", marginTop: 2 }}>def: {fmtCurrency(ct.default_price)}</div>
-                    </th>
-                  ))}
-                  <th style={{ textAlign: "center", padding: "8px", borderBottom: "1px solid #23262f", color: "#6b7280", fontSize: 10, minWidth: 50 }}>RESET</th>
-                </tr>
-              </thead>
-              <tbody>
-                {matrix.map(c => (
-                  <tr key={c.id} style={{ borderBottom: "1px solid #1e2130" }}>
-                    <td style={{ padding: "8px 10px", fontWeight: 600, color: "#d1d5db", position: "sticky", left: 0, background: "#1a1d27", zIndex: 1 }}>{c.name}</td>
-                    {cylinderTypes.map(ct => {
-                      const cellKey = `${c.id}__${ct.id}`;
-                      const info = c.prices[ct.id];
-                      const isEditing = editingCell === cellKey;
-                      return (
-                        <td key={ct.id} style={{ textAlign: "right", padding: "4px 6px" }}>
-                          {isEditing ? (
-                            <input autoFocus type="number" step="0.01" min="0" value={cellValue}
-                              onChange={e => setCellValue(e.target.value)}
-                              onKeyDown={e => { if (e.key === "Enter") saveCell(c.id, ct.id); if (e.key === "Escape") setEditingCell(null); }}
-                              onBlur={() => saveCell(c.id, ct.id)}
-                              style={{ width: 72, padding: "4px 6px", borderRadius: 4, border: "1px solid #f59e0b", background: "#0f1117", color: "#f59e0b", fontSize: 12, fontFamily: "'JetBrains Mono', monospace", textAlign: "right", outline: "none" }}
-                            />
-                          ) : (
-                            <div
-                              onClick={() => { setEditingCell(cellKey); setCellValue(String(info.value)); }}
-                              onContextMenu={e => { e.preventDefault(); if (info.isCustom) resetCell(c.id, ct.id); }}
-                              style={{ cursor: "pointer", padding: "4px 6px", borderRadius: 4, fontFamily: "'JetBrains Mono', monospace", color: info.isCustom ? "#f59e0b" : "#6b7280", background: info.isCustom ? "#f59e0b0a" : "transparent", border: `1px solid ${info.isCustom ? "#f59e0b22" : "transparent"}` }}
-                              title={info.isCustom ? "Custom — right-click to reset" : "Default — click to override"}
-                            >
-                              {fmtCurrency(info.value)}
-                              {info.isCustom && <span style={{ fontSize: 9, marginLeft: 3, color: "#f59e0b" }}>●</span>}
-                            </div>
-                          )}
-                        </td>
-                      );
-                    })}
-                    <td style={{ textAlign: "center", padding: "4px 6px" }}>
-                      {c.hasCustom && (
-                        <button onClick={() => resetAllForCustomer(c.id)} style={{ background: "none", border: "1px solid #23262f", borderRadius: 4, padding: "3px 6px", cursor: "pointer", color: "#6b7280" }}>
-                          <Icon d={Icons.undo} size={12} color="#6b7280" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: "#4b5563" }}>
-            <span><span style={{ color: "#f59e0b" }}>●</span> Customer override</span>
-            <span>Grey = default from Cylinder Types</span>
-          </div>
-        </Card>
-      </div>
     </div>
   );
 }

@@ -2,24 +2,22 @@ const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
 
-const DB_DIR = process.env.DB_DIR || __dirname;
-if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
-const DB_PATH = path.join(DB_DIR, "cylindertrack.db");
-
 function initDB() {
-  const db = new Database(DB_PATH);
+  const dbDir = process.env.DB_DIR || path.join(__dirname);
+  if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+  const dbPath = path.join(dbDir, "cylindertrack.db");
+  const db = new Database(dbPath);
 
-  // Enable WAL mode for better concurrent read performance
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
 
   // --- USERS ---
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin', 'user')),
+      id TEXT PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      role TEXT DEFAULT 'user',
       created TEXT DEFAULT (datetime('now'))
     )
   `);
@@ -28,9 +26,9 @@ function initDB() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
       created TEXT DEFAULT (datetime('now')),
-      expires TEXT NOT NULL
+      FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
 
@@ -44,82 +42,122 @@ function initDB() {
       email TEXT DEFAULT '',
       address TEXT DEFAULT '',
       notes TEXT DEFAULT '',
+      onedrive_link TEXT DEFAULT '',
       created TEXT DEFAULT (date('now')),
       updated TEXT DEFAULT (datetime('now'))
     )
   `);
+
+  // Migration: add onedrive_link if missing
+  try { db.exec("ALTER TABLE customers ADD COLUMN onedrive_link TEXT DEFAULT ''"); } catch(e) { /* exists */ }
 
   // --- CYLINDER TYPES ---
   db.exec(`
     CREATE TABLE IF NOT EXISTS cylinder_types (
       id TEXT PRIMARY KEY,
       label TEXT NOT NULL,
-      default_price REAL NOT NULL DEFAULT 0,
+      default_price REAL DEFAULT 0,
       gas_group TEXT DEFAULT '',
-      item_type TEXT NOT NULL DEFAULT 'cylinder' CHECK(item_type IN ('cylinder', 'service')),
-      sort_order INTEGER DEFAULT 0,
-      created TEXT DEFAULT (datetime('now'))
+      item_type TEXT DEFAULT 'cylinder',
+      sort_order INTEGER DEFAULT 0
     )
   `);
+
+  // Migration: add item_type if missing
+  try { db.exec("ALTER TABLE cylinder_types ADD COLUMN item_type TEXT DEFAULT 'cylinder'"); } catch(e) { /* exists */ }
 
   // --- TRANSACTIONS ---
   db.exec(`
     CREATE TABLE IF NOT EXISTS transactions (
       id TEXT PRIMARY KEY,
-      customer_id TEXT NOT NULL REFERENCES customers(id),
-      customer_name TEXT DEFAULT '',
-      cylinder_type TEXT NOT NULL REFERENCES cylinder_types(id),
-      type TEXT NOT NULL CHECK(type IN ('delivery', 'return', 'sale')),
-      qty INTEGER NOT NULL DEFAULT 1,
+      customer_id TEXT NOT NULL,
+      cylinder_type TEXT NOT NULL,
+      type TEXT NOT NULL,
+      qty INTEGER NOT NULL,
       date TEXT NOT NULL,
       notes TEXT DEFAULT '',
+      source TEXT DEFAULT 'manual',
+      optimoroute_order TEXT DEFAULT '',
+      created TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (customer_id) REFERENCES customers(id),
+      FOREIGN KEY (cylinder_type) REFERENCES cylinder_types(id)
+    )
+  `);
+
+  // Migrations for OptimoRoute fields
+  try { db.exec("ALTER TABLE transactions ADD COLUMN source TEXT DEFAULT 'manual'"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE transactions ADD COLUMN optimoroute_order TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+
+  // --- CUSTOMER PRICING (with price history) ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS customer_pricing (
+      customer_id TEXT NOT NULL,
+      cylinder_type TEXT NOT NULL,
+      price REAL NOT NULL,
+      PRIMARY KEY (customer_id, cylinder_type),
+      FOREIGN KEY (customer_id) REFERENCES customers(id),
+      FOREIGN KEY (cylinder_type) REFERENCES cylinder_types(id)
+    )
+  `);
+
+  // --- PRICE HISTORY (locked-in prices per effective date) ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS price_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id TEXT NOT NULL,
+      cylinder_type TEXT NOT NULL,
+      price REAL NOT NULL,
+      effective_from TEXT NOT NULL,
+      created TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (customer_id) REFERENCES customers(id),
+      FOREIGN KEY (cylinder_type) REFERENCES cylinder_types(id)
+    )
+  `);
+
+  // --- OPTIMOROUTE SETTINGS ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+
+  // --- OPTIMOROUTE SYNC LOG ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS optimoroute_sync_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sync_date TEXT NOT NULL,
+      orders_fetched INTEGER DEFAULT 0,
+      orders_imported INTEGER DEFAULT 0,
+      orders_skipped INTEGER DEFAULT 0,
+      errors TEXT DEFAULT '',
       created TEXT DEFAULT (datetime('now'))
     )
   `);
 
-  // --- CUSTOMER PRICING (overrides) ---
+  // --- OPTIMOROUTE ORDER MAPPING ---
   db.exec(`
-    CREATE TABLE IF NOT EXISTS customer_pricing (
-      customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-      cylinder_type_id TEXT NOT NULL REFERENCES cylinder_types(id) ON DELETE CASCADE,
-      price REAL NOT NULL,
+    CREATE TABLE IF NOT EXISTS optimoroute_orders (
+      order_no TEXT PRIMARY KEY,
+      customer_id TEXT,
+      status TEXT DEFAULT '',
+      order_type TEXT DEFAULT '',
+      order_date TEXT DEFAULT '',
+      location_name TEXT DEFAULT '',
+      location_address TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      custom_fields TEXT DEFAULT '{}',
+      completion_status TEXT DEFAULT '',
+      completed_at TEXT DEFAULT '',
+      driver_name TEXT DEFAULT '',
+      raw_json TEXT DEFAULT '{}',
+      imported INTEGER DEFAULT 0,
+      created TEXT DEFAULT (datetime('now')),
       updated TEXT DEFAULT (datetime('now')),
-      PRIMARY KEY (customer_id, cylinder_type_id)
+      FOREIGN KEY (customer_id) REFERENCES customers(id)
     )
   `);
 
-  // --- INDEX for fast on-hand queries ---
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_tx_customer ON transactions(customer_id);
-    CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
-    CREATE INDEX IF NOT EXISTS idx_tx_type ON transactions(type);
-  `);
-
-  // Seed default cylinder types if table is empty
-  const count = db.prepare("SELECT COUNT(*) as c FROM cylinder_types").get().c;
-  if (count === 0) {
-    const insert = db.prepare(
-      "INSERT INTO cylinder_types (id, label, default_price, gas_group, item_type, sort_order) VALUES (?, ?, ?, ?, ?, ?)"
-    );
-    const seeds = [
-      ["oxy_g", "Oxygen G Size", 45.0, "Oxygen", "cylinder", 1],
-      ["oxy_e", "Oxygen E Size", 32.0, "Oxygen", "cylinder", 2],
-      ["acet_g", "Acetylene G Size", 55.0, "Acetylene", "cylinder", 3],
-      ["argon_d", "Argon D Size", 40.0, "Argon", "cylinder", 4],
-      ["co2_e", "CO₂ E Size", 28.0, "CO₂", "cylinder", 5],
-      ["nit_g", "Nitrogen G Size", 38.0, "Nitrogen", "cylinder", 6],
-      ["lpg_45", "LPG 45kg", 85.0, "LPG", "cylinder", 7],
-      ["lpg_9", "LPG 9kg", 35.0, "LPG", "cylinder", 8],
-      ["gas_supply", "Gas Supply Service", 65.0, "Other", "service", 9],
-    ];
-    const insertMany = db.transaction((rows) => {
-      for (const row of rows) insert.run(...row);
-    });
-    insertMany(seeds);
-    console.log("  Seeded default cylinder types");
-  }
-
-  console.log("✓ Database initialized:", DB_PATH);
   return db;
 }
 

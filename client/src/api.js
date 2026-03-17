@@ -15,61 +15,80 @@ async function request(path, options = {}) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || "Request failed");
+    throw new Error(err.error || res.statusText);
   }
   return res.json();
 }
 
-// Auth
-export const getAuthStatus = () => request("/auth/status");
-export const login = (username, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
-export const setup = (username, password) => request("/auth/setup", { method: "POST", body: JSON.stringify({ username, password }) });
-export const logout = () => request("/auth/logout", { method: "POST" });
-export const changePassword = (currentPassword, newPassword) => request("/auth/change-password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) });
-export const addUser = (username, password, role) => request("/auth/add-user", { method: "POST", body: JSON.stringify({ username, password, role }) });
+const api = {
+  // Auth
+  authStatus: () => request("/auth/status"),
+  setup: (username, password) => request("/auth/setup", { method: "POST", body: JSON.stringify({ username, password }) }),
+  login: (username, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  logout: () => request("/auth/logout", { method: "POST" }),
+  getUsers: () => request("/auth/users"),
+  addUser: (username, password, role) => request("/auth/add-user", { method: "POST", body: JSON.stringify({ username, password, role }) }),
+  changePassword: (userId, newPassword) => request("/auth/change-password", { method: "POST", body: JSON.stringify({ userId, newPassword }) }),
 
-// Customers
-export const getCustomers = () => request("/customers");
-export const createCustomer = (data) => request("/customers", { method: "POST", body: JSON.stringify(data) });
-export const updateCustomer = (id, data) => request(`/customers/${id}`, { method: "PUT", body: JSON.stringify(data) });
-export const deleteCustomer = (id) => request(`/customers/${id}`, { method: "DELETE" });
+  // Customers
+  getCustomers: () => request("/customers"),
+  createCustomer: (data) => request("/customers", { method: "POST", body: JSON.stringify(data) }),
+  updateCustomer: (id, data) => request(`/customers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteCustomer: (id) => request(`/customers/${id}`, { method: "DELETE" }),
 
-// Cylinder Types
-export const getCylinderTypes = () => request("/cylinder-types");
-export const createCylinderType = (data) => request("/cylinder-types", { method: "POST", body: JSON.stringify(data) });
-export const updateCylinderType = (id, data) => request(`/cylinder-types/${id}`, { method: "PUT", body: JSON.stringify(data) });
-export const deleteCylinderType = (id) => request(`/cylinder-types/${id}`, { method: "DELETE" });
+  // Cylinder Types
+  getCylinderTypes: () => request("/cylinder-types"),
+  createCylinderType: (data) => request("/cylinder-types", { method: "POST", body: JSON.stringify(data) }),
+  updateCylinderType: (id, data) => request(`/cylinder-types/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteCylinderType: (id) => request(`/cylinder-types/${id}`, { method: "DELETE" }),
 
-// Transactions
-export const getTransactions = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/transactions${qs ? `?${qs}` : ""}`);
+  // Transactions
+  getTransactions: (params) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/transactions${qs ? "?" + qs : ""}`);
+  },
+  createTransaction: (data) => request("/transactions", { method: "POST", body: JSON.stringify(data) }),
+  deleteTransaction: (id) => request(`/transactions/${id}`, { method: "DELETE" }),
+
+  // On-hand
+  getOnHand: () => request("/on-hand"),
+
+  // Pricing
+  getPricing: () => request("/pricing"),
+  setPrice: (custId, typeId, price) => request(`/pricing/${custId}/${typeId}`, { method: "PUT", body: JSON.stringify({ price }) }),
+  deletePrice: (custId, typeId) => request(`/pricing/${custId}/${typeId}`, { method: "DELETE" }),
+  bulkPrice: (data) => request("/pricing/bulk", { method: "POST", body: JSON.stringify(data) }),
+
+  // Billing
+  getBilling: (params) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/billing?${qs}`);
+  },
+
+  // Stats
+  getStats: () => request("/stats"),
+
+  // Search
+  search: (q) => request(`/search?q=${encodeURIComponent(q)}`),
+
+  // Settings
+  getSettings: () => request("/settings"),
+  updateSettings: (data) => request("/settings", { method: "PUT", body: JSON.stringify(data) }),
+
+  // Backup
+  getBackup: () => request("/backup"),
+  restore: (data) => request("/restore", { method: "POST", body: JSON.stringify(data) }),
+
+  // OptimoRoute
+  orTestConnection: () => request("/optimoroute/test", { method: "POST" }),
+  orGetRoutes: (date) => request(`/optimoroute/routes?date=${date}`),
+  orSearch: (from, to) => request(`/optimoroute/search?from=${from}&to=${to}`),
+  orGetCompletion: (orderNos) => request("/optimoroute/completion", { method: "POST", body: JSON.stringify({ orderNos }) }),
+  orSync: (dateFrom, dateTo) => request("/optimoroute/sync", { method: "POST", body: JSON.stringify({ dateFrom, dateTo }) }),
+  orDebug: (dateFrom, dateTo) => request("/optimoroute/debug", { method: "POST", body: JSON.stringify({ dateFrom, dateTo }) }),
+  orGetUnmatched: () => request("/optimoroute/unmatched"),
+  orImportManual: (data) => request("/optimoroute/import-manual", { method: "POST", body: JSON.stringify(data) }),
+  orGetSyncLog: () => request("/optimoroute/sync-log"),
 };
-export const createTransaction = (data) => request("/transactions", { method: "POST", body: JSON.stringify(data) });
 
-// On-hand
-export const getOnHand = (customerId) => {
-  const qs = customerId ? `?customer_id=${customerId}` : "";
-  return request(`/on-hand${qs}`);
-};
-
-// Pricing
-export const getPricing = () => request("/pricing");
-export const setPrice = (customerId, cylinderTypeId, price) =>
-  request(`/pricing/${customerId}/${cylinderTypeId}`, { method: "PUT", body: JSON.stringify({ price }) });
-export const bulkSetPrice = (customer_ids, cylinder_type_id, price) =>
-  request("/pricing/bulk", { method: "POST", body: JSON.stringify({ customer_ids, cylinder_type_id, price }) });
-export const resetPrice = (customerId, cylinderTypeId) =>
-  request(`/pricing/${customerId}/${cylinderTypeId}`, { method: "DELETE" });
-export const resetAllPricing = (customerId) =>
-  request(`/pricing/${customerId}`, { method: "DELETE" });
-
-// Billing
-export const getBilling = (month) => request(`/billing?month=${month}`);
-
-// Dashboard Stats
-export const getStats = () => request("/stats");
-
-// Backup & Restore
-export const downloadBackup = () => request("/backup");
-export const restoreBackup = (data) => request("/restore", { method: "POST", body: JSON.stringify({ data }) });
+export default api;
