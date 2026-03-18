@@ -1,8 +1,9 @@
 const express = require("express");
-const crypto = require("crypto");
+const nodeCrypto = require("crypto");
 const { OptimoRouteClient } = require("./optimoroute");
+const { encrypt, decrypt, maskCard } = require("./crypto");
 
-const uid = () => crypto.randomBytes(6).toString("hex");
+const uid = () => nodeCrypto.randomBytes(6).toString("hex");
 
 module.exports = function createRoutes(db) {
   const router = express.Router();
@@ -31,26 +32,57 @@ module.exports = function createRoutes(db) {
   // CUSTOMERS
   // ============================================================
   router.get("/customers", (req, res) => {
-    res.json(db.prepare("SELECT * FROM customers ORDER BY name").all());
+    const rows = db.prepare("SELECT * FROM customers ORDER BY name").all();
+    // Return masked CC — never send encrypted blob to client
+    const safe = rows.map(c => ({
+      ...c,
+      cc_masked: maskCard(decrypt(c.cc_encrypted, db)),
+      cc_encrypted: undefined, // strip encrypted data
+    }));
+    res.json(safe);
   });
 
   router.post("/customers", (req, res) => {
-    const { name, contact, phone, email, address, notes, onedrive_link } = req.body;
+    const { name, contact, phone, email, address, notes, onedrive_link, payment_ref, cc_number, account_customer } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: "Name is required" });
     const id = uid();
+    const ccEnc = cc_number ? encrypt(cc_number.replace(/\D/g, ""), db) : "";
     db.prepare(
-      "INSERT INTO customers (id, name, contact, phone, email, address, notes, onedrive_link) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(id, name.trim(), contact || "", phone || "", email || "", address || "", notes || "", onedrive_link || "");
+      "INSERT INTO customers (id, name, contact, phone, email, address, notes, onedrive_link, payment_ref, cc_encrypted, account_customer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, name.trim(), contact || "", phone || "", email || "", address || "", notes || "", onedrive_link || "", payment_ref || "", ccEnc, account_customer ? 1 : 0);
     res.json({ id, name: name.trim() });
   });
 
   router.put("/customers/:id", (req, res) => {
-    const { name, contact, phone, email, address, notes, onedrive_link } = req.body;
+    const { name, contact, phone, email, address, notes, onedrive_link, payment_ref, cc_number, account_customer } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: "Name is required" });
-    const result = db.prepare(
-      "UPDATE customers SET name=?, contact=?, phone=?, email=?, address=?, notes=?, onedrive_link=?, updated=datetime('now') WHERE id=?"
-    ).run(name.trim(), contact || "", phone || "", email || "", address || "", notes || "", onedrive_link || "", req.params.id);
-    if (result.changes === 0) return res.status(404).json({ error: "Customer not found" });
+    if (cc_number && cc_number.replace(/\D/g, "").length >= 4) {
+      const ccEnc = encrypt(cc_number.replace(/\D/g, ""), db);
+      db.prepare(
+        "UPDATE customers SET name=?, contact=?, phone=?, email=?, address=?, notes=?, onedrive_link=?, payment_ref=?, cc_encrypted=?, account_customer=?, updated=datetime('now') WHERE id=?"
+      ).run(name.trim(), contact || "", phone || "", email || "", address || "", notes || "", onedrive_link || "", payment_ref || "", ccEnc, account_customer ? 1 : 0, req.params.id);
+    } else {
+      db.prepare(
+        "UPDATE customers SET name=?, contact=?, phone=?, email=?, address=?, notes=?, onedrive_link=?, payment_ref=?, account_customer=?, updated=datetime('now') WHERE id=?"
+      ).run(name.trim(), contact || "", phone || "", email || "", address || "", notes || "", onedrive_link || "", payment_ref || "", account_customer ? 1 : 0, req.params.id);
+    }
+    res.json({ success: true });
+  });
+
+  // Reveal full CC number (admin only, one customer at a time)
+  router.get("/customers/:id/reveal-cc", (req, res) => {
+    const cust = db.prepare("SELECT cc_encrypted FROM customers WHERE id = ?").get(req.params.id);
+    if (!cust) return res.status(404).json({ error: "Customer not found" });
+    if (!cust.cc_encrypted) return res.json({ cc_number: "" });
+    const decrypted = decrypt(cust.cc_encrypted, db);
+    // Format as groups of 4
+    const formatted = decrypted.replace(/(\d{4})(?=\d)/g, "$1 ");
+    res.json({ cc_number: formatted });
+  });
+
+  // Delete CC from file
+  router.delete("/customers/:id/cc", (req, res) => {
+    db.prepare("UPDATE customers SET cc_encrypted = '' WHERE id = ?").run(req.params.id);
     res.json({ success: true });
   });
 
@@ -132,6 +164,236 @@ module.exports = function createRoutes(db) {
   });
 
   // ============================================================
+  // ORDERS
+  // ============================================================
+  router.get("/orders", (req, res) => {
+    const { status, customer_id, from, to, limit } = req.query;
+    let sql = "SELECT o.*, c.name as customer_name_lookup, c.address as customer_address_lookup FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE 1=1";
+    const params = [];
+    if (status) { sql += " AND o.status = ?"; params.push(status); }
+    if (customer_id) { sql += " AND o.customer_id = ?"; params.push(customer_id); }
+    if (from) { sql += " AND o.order_date >= ?"; params.push(from); }
+    if (to) { sql += " AND o.order_date <= ?"; params.push(to); }
+    sql += " ORDER BY o.order_date DESC, o.created DESC";
+    if (limit) { sql += " LIMIT ?"; params.push(parseInt(limit)); }
+    res.json(db.prepare(sql).all(...params));
+  });
+
+  // Lookup price for a customer + order field (e.g. "2x45")
+  router.get("/orders/lookup-price", (req, res) => {
+    const { customer_id, order_detail } = req.query;
+    if (!order_detail) return res.json({ lines: [], total: 0 });
+
+    const cylinderTypes = db.prepare("SELECT * FROM cylinder_types").all();
+    
+    // Split by comma into individual items
+    const items = order_detail.split(",").map(s => s.trim()).filter(Boolean);
+    const lines = [];
+    let total = 0;
+
+    // Get all customer prices in one query
+    let custPriceMap = {};
+    if (customer_id) {
+      const rows = db.prepare("SELECT * FROM customer_pricing WHERE customer_id = ?").all(customer_id);
+      for (const r of rows) custPriceMap[r.cylinder_type] = r.price;
+    }
+
+    for (const item of items) {
+      const parsed = parseCylinderFromText(item, cylinderTypes);
+      if (!parsed.cylinderType) {
+        lines.push({ raw: item, matched: false, cylinder_label: "", cylinder_type_id: "", qty: 0, unit_price: 0, line_total: 0 });
+        continue;
+      }
+      const ct = parsed.cylinderType;
+      const qty = parsed.qty || 1;
+      const unitPrice = custPriceMap[ct.id] !== undefined ? custPriceMap[ct.id] : ct.default_price;
+      const lineTotal = Math.round(unitPrice * qty * 100) / 100;
+      total += lineTotal;
+      lines.push({
+        raw: item,
+        matched: true,
+        cylinder_label: ct.label,
+        cylinder_type_id: ct.id,
+        qty,
+        unit_price: unitPrice,
+        line_total: lineTotal,
+      });
+    }
+
+    // For backwards compat, also return first item's data as top-level fields
+    const first = lines.find(l => l.matched) || {};
+    res.json({
+      lines,
+      total: Math.round(total * 100) / 100,
+      // First matched item (for cylinder tracking transaction)
+      unit_price: first.unit_price || 0,
+      qty: first.qty || 0,
+      cylinder_type_id: first.cylinder_type_id || "",
+      cylinder_label: first.cylinder_label || "",
+    });
+  });
+
+  router.post("/orders", (req, res) => {
+    const { customer_id, address, customer_name, order_detail, cylinder_type_id, qty, unit_price, total_price, notes, order_date, payment, payment_ref } = req.body;
+    if (!customer_id) return res.status(400).json({ error: "Customer is required" });
+    if (!order_date) return res.status(400).json({ error: "Order date is required" });
+    const id = uid();
+    db.prepare(
+      "INSERT INTO orders (id, customer_id, address, customer_name, order_detail, cylinder_type_id, qty, unit_price, total_price, notes, order_date, payment, payment_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, customer_id, address || "", customer_name || "", order_detail || "", cylinder_type_id || "", qty || 1, unit_price || 0, total_price || 0, notes || "", order_date, payment || "", payment_ref || "");
+    res.json({ id });
+  });
+
+  router.put("/orders/:id", (req, res) => {
+    const { customer_id, address, customer_name, order_detail, cylinder_type_id, qty, unit_price, total_price, notes, order_date, payment, payment_ref, status } = req.body;
+    db.prepare(
+      "UPDATE orders SET customer_id=?, address=?, customer_name=?, order_detail=?, cylinder_type_id=?, qty=?, unit_price=?, total_price=?, notes=?, order_date=?, payment=?, payment_ref=?, status=?, updated=datetime('now') WHERE id=?"
+    ).run(customer_id, address || "", customer_name || "", order_detail || "", cylinder_type_id || "", qty || 1, unit_price || 0, total_price || 0, notes || "", order_date, payment || "", payment_ref || "", status || "open", req.params.id);
+    res.json({ success: true });
+  });
+
+  // Update customer price from order
+  router.post("/orders/update-customer-price", (req, res) => {
+    const { customer_id, cylinder_type_id, price } = req.body;
+    if (!customer_id || !cylinder_type_id || price === undefined) return res.status(400).json({ error: "Missing fields" });
+    const today = new Date().toISOString().split("T")[0];
+
+    // Check if there's an active fixed price contract — don't overwrite it
+    const existing = db.prepare("SELECT * FROM customer_pricing WHERE customer_id = ? AND cylinder_type = ?").get(customer_id, cylinder_type_id);
+    if (existing?.fixed_price && existing.fixed_from && existing.fixed_to && today >= existing.fixed_from && today <= existing.fixed_to) {
+      return res.status(400).json({ error: "Cannot update — customer has an active fixed price contract until " + existing.fixed_to });
+    }
+
+    // Preserve fixed price fields if they exist
+    db.prepare(
+      "INSERT OR REPLACE INTO customer_pricing (customer_id, cylinder_type, price, fixed_price, fixed_from, fixed_to) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run(customer_id, cylinder_type_id, price, existing?.fixed_price || 0, existing?.fixed_from || "", existing?.fixed_to || "");
+    db.prepare("INSERT INTO price_history (customer_id, cylinder_type, price, effective_from) VALUES (?, ?, ?, ?)").run(customer_id, cylinder_type_id, price, today);
+    res.json({ success: true });
+  });
+
+  router.delete("/orders/:id", (req, res) => {
+    db.prepare("DELETE FROM orders WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
+  });
+
+  // Confirm payment → push order to OptimoRoute + create delivery transactions
+  router.post("/orders/:id/confirm-payment", async (req, res) => {
+    try {
+      const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.id);
+      if (!order) return res.status(404).json({ error: "Order not found" });
+
+      const apiKey = getApiKey(db);
+      if (!apiKey) return res.status(400).json({ error: "OptimoRoute API key not configured" });
+      const client = new OptimoRouteClient(apiKey);
+
+      let orResult;
+      if (order.optimoroute_id) {
+        orResult = await client.syncOrder({
+          id: order.optimoroute_id,
+          customerName: order.customer_name,
+          address: order.address,
+          payment: order.payment,
+          order: order.order_detail,
+          notes: order.notes,
+          date: order.order_date,
+        });
+      } else {
+        orResult = await client.createOrder({
+          customerName: order.customer_name,
+          address: order.address,
+          payment: order.payment,
+          order: order.order_detail,
+          notes: order.notes,
+          date: order.order_date,
+        });
+      }
+
+      const orId = orResult.id || order.optimoroute_id || "";
+      db.prepare(
+        "UPDATE orders SET payment_confirmed = 1, optimoroute_id = ?, status = 'confirmed', updated = datetime('now') WHERE id = ?"
+      ).run(orId, req.params.id);
+
+      // Auto-create delivery transaction from order qty + cylinder type
+      let txCreated = 0;
+      if (order.cylinder_type_id && order.qty > 0) {
+        const txId = uid();
+        db.prepare(
+          "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).run(txId, order.customer_id, order.cylinder_type_id, "delivery", order.qty, order.order_date, `Order: ${order.order_detail}`, "order", req.params.id);
+        txCreated = 1;
+      }
+
+      res.json({ success: true, optimoroute: orResult, transactionsCreated: txCreated });
+    } catch (err) {
+      console.error("[OR Push] Error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Resend/update an already-confirmed order to OptimoRoute
+  router.post("/orders/:id/resend", async (req, res) => {
+    try {
+      const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.id);
+      if (!order) return res.status(404).json({ error: "Order not found" });
+      if (!order.optimoroute_id) return res.status(400).json({ error: "Order has not been pushed to OptimoRoute yet" });
+
+      const apiKey = getApiKey(db);
+      if (!apiKey) return res.status(400).json({ error: "OptimoRoute API key not configured" });
+      const client = new OptimoRouteClient(apiKey);
+
+      const orResult = await client.syncOrder({
+        id: order.optimoroute_id,
+        customerName: order.customer_name,
+        address: order.address,
+        payment: order.payment,
+        order: order.order_detail,
+        notes: order.notes,
+        date: order.order_date,
+      });
+
+      db.prepare("UPDATE orders SET updated = datetime('now') WHERE id = ?").run(req.params.id);
+      res.json({ success: true, optimoroute: orResult });
+    } catch (err) {
+      console.error("[OR Resend] Error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ============================================================
+  // OPENING BALANCES
+  // ============================================================
+  // Add single opening balance
+  router.post("/opening-balance", (req, res) => {
+    const { customer_id, cylinder_type, qty, date } = req.body;
+    if (!customer_id || !cylinder_type || !qty || !date) return res.status(400).json({ error: "All fields required" });
+    const id = uid();
+    db.prepare(
+      "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, customer_id, cylinder_type, "delivery", parseInt(qty), date, "Opening balance", "opening_balance");
+    res.json({ id, success: true });
+  });
+
+  // Bulk import opening balances
+  router.post("/opening-balance/bulk", (req, res) => {
+    const { entries } = req.body; // [{ customer_id, cylinder_type, qty, date }]
+    if (!entries?.length) return res.status(400).json({ error: "No entries provided" });
+    let imported = 0;
+    const stmt = db.prepare(
+      "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+    db.transaction(() => {
+      for (const e of entries) {
+        if (e.customer_id && e.cylinder_type && e.qty > 0) {
+          stmt.run(uid(), e.customer_id, e.cylinder_type, "delivery", parseInt(e.qty), e.date || new Date().toISOString().split("T")[0], "Opening balance", "opening_balance");
+          imported++;
+        }
+      }
+    })();
+    res.json({ success: true, imported });
+  });
+
+  // ============================================================
   // ON-HAND
   // ============================================================
   router.get("/on-hand", (req, res) => {
@@ -147,6 +409,110 @@ module.exports = function createRoutes(db) {
     `).all());
   });
 
+  // On-hand as at a specific date (point-in-time)
+  router.get("/on-hand/as-at", (req, res) => {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: "date is required" });
+    const rows = db.prepare(`
+      SELECT t.customer_id, t.cylinder_type,
+        SUM(CASE WHEN t.type='delivery' THEN t.qty ELSE 0 END) -
+        SUM(CASE WHEN t.type='return' THEN t.qty ELSE 0 END) as on_hand
+      FROM transactions t
+      JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      WHERE ct.item_type = 'cylinder' AND t.date <= ?
+      GROUP BY t.customer_id, t.cylinder_type
+      HAVING on_hand != 0
+    `).all(date);
+
+    // Enrich with customer name, cylinder label, and pricing
+    const customers = db.prepare("SELECT id, name, address, account_customer FROM customers").all();
+    const custMap = {};
+    for (const c of customers) custMap[c.id] = c;
+
+    const cylinderTypes = db.prepare("SELECT id, label, default_price FROM cylinder_types WHERE item_type = 'cylinder'").all();
+    const ctMap = {};
+    for (const ct of cylinderTypes) ctMap[ct.id] = ct;
+
+    const enriched = rows.map(r => {
+      const cust = custMap[r.customer_id] || {};
+      const ct = ctMap[r.cylinder_type] || {};
+      const unitPrice = getPriceForDate(db, r.customer_id, r.cylinder_type, date, ct.default_price || 0);
+      return {
+        customer_id: r.customer_id,
+        customer_name: cust.name || "Unknown",
+        customer_address: cust.address || "",
+        account_customer: cust.account_customer || 0,
+        cylinder_type: r.cylinder_type,
+        cylinder_label: ct.label || r.cylinder_type,
+        on_hand: r.on_hand,
+        unit_price: unitPrice,
+        line_total: Math.round(unitPrice * r.on_hand * 100) / 100,
+      };
+    });
+
+    res.json(enriched);
+  });
+
+  // Generate rental invoices — creates billing transactions for selected customers
+  router.post("/on-hand/generate-invoices", (req, res) => {
+    const { date, customers: customerIds } = req.body;
+    if (!date || !customerIds?.length) return res.status(400).json({ error: "date and customers are required" });
+
+    const cylinderTypes = db.prepare("SELECT * FROM cylinder_types WHERE item_type = 'cylinder'").all();
+    const ctMap = {};
+    for (const ct of cylinderTypes) ctMap[ct.id] = ct;
+
+    const txStmt = db.prepare(
+      "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+
+    let totalTx = 0;
+    const invoices = [];
+
+    db.transaction(() => {
+      for (const custId of customerIds) {
+        // Calculate on-hand as at date for this customer
+        const rows = db.prepare(`
+          SELECT t.cylinder_type,
+            SUM(CASE WHEN t.type='delivery' THEN t.qty ELSE 0 END) -
+            SUM(CASE WHEN t.type='return' THEN t.qty ELSE 0 END) as on_hand
+          FROM transactions t
+          JOIN cylinder_types ct ON ct.id = t.cylinder_type
+          WHERE ct.item_type = 'cylinder' AND t.customer_id = ? AND t.date <= ?
+          GROUP BY t.cylinder_type
+          HAVING on_hand > 0
+        `).all(custId, date);
+
+        const lines = [];
+        for (const r of rows) {
+          const ct = ctMap[r.cylinder_type];
+          if (!ct) continue;
+          const unitPrice = getPriceForDate(db, custId, r.cylinder_type, date, ct.default_price || 0);
+          const lineTotal = Math.round(unitPrice * r.on_hand * 100) / 100;
+
+          // Create a rental billing transaction
+          const txId = uid();
+          txStmt.run(txId, custId, r.cylinder_type, "rental_invoice", r.on_hand, date, `Rental invoice as at ${date}`, "rental_invoice");
+          totalTx++;
+
+          lines.push({
+            cylinder_type: r.cylinder_type,
+            cylinder_label: ct.label,
+            on_hand: r.on_hand,
+            unit_price: unitPrice,
+            line_total: lineTotal,
+          });
+        }
+
+        if (lines.length > 0) {
+          invoices.push({ customer_id: custId, lines, total: Math.round(lines.reduce((s, l) => s + l.line_total, 0) * 100) / 100 });
+        }
+      }
+    })();
+
+    res.json({ success: true, invoicesGenerated: invoices.length, transactionsCreated: totalTx, invoices });
+  });
+
   // ============================================================
   // PRICING
   // ============================================================
@@ -154,11 +520,38 @@ module.exports = function createRoutes(db) {
     res.json(db.prepare("SELECT * FROM customer_pricing").all());
   });
 
+  // Get full price list for a specific customer (all cylinder types with their prices)
+  router.get("/pricing/customer/:custId", (req, res) => {
+    const cylinderTypes = db.prepare("SELECT * FROM cylinder_types ORDER BY sort_order, label").all();
+    const custPrices = db.prepare("SELECT * FROM customer_pricing WHERE customer_id = ?").all(req.params.custId);
+    const priceMap = {};
+    for (const p of custPrices) priceMap[p.cylinder_type] = p;
+
+    const list = cylinderTypes.map(ct => {
+      const cp = priceMap[ct.id];
+      return {
+        cylinder_type: ct.id,
+        label: ct.label,
+        default_price: ct.default_price,
+        item_type: ct.item_type,
+        customer_price: cp?.price ?? null,
+        effective_price: cp?.price ?? ct.default_price,
+        is_custom: !!cp,
+        fixed_price: cp?.fixed_price || 0,
+        fixed_from: cp?.fixed_from || "",
+        fixed_to: cp?.fixed_to || "",
+      };
+    });
+    res.json(list);
+  });
+
+  // Set individual customer price (with optional fixed price contract)
   router.put("/pricing/:custId/:typeId", (req, res) => {
-    const { price } = req.body;
+    const { price, fixed_price, fixed_from, fixed_to } = req.body;
     const today = new Date().toISOString().split("T")[0];
-    db.prepare("INSERT OR REPLACE INTO customer_pricing (customer_id, cylinder_type, price) VALUES (?, ?, ?)").run(req.params.custId, req.params.typeId, price);
-    // Log price history
+    db.prepare(
+      "INSERT OR REPLACE INTO customer_pricing (customer_id, cylinder_type, price, fixed_price, fixed_from, fixed_to) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run(req.params.custId, req.params.typeId, price, fixed_price ? 1 : 0, fixed_from || "", fixed_to || "");
     db.prepare("INSERT INTO price_history (customer_id, cylinder_type, price, effective_from) VALUES (?, ?, ?, ?)").run(req.params.custId, req.params.typeId, price, today);
     res.json({ success: true });
   });
@@ -168,34 +561,48 @@ module.exports = function createRoutes(db) {
     res.json({ success: true });
   });
 
-  // Get price history for a customer/type
   router.get("/pricing/history/:custId/:typeId", (req, res) => {
     res.json(db.prepare("SELECT * FROM price_history WHERE customer_id = ? AND cylinder_type = ? ORDER BY effective_from DESC").all(req.params.custId, req.params.typeId));
   });
 
+  // Bulk pricing — skips customers with active fixed price contracts
   router.post("/pricing/bulk", (req, res) => {
     const { cylinder_type, price, customer_ids, mode, percentage } = req.body;
     if (!cylinder_type || !customer_ids?.length) return res.status(400).json({ error: "Missing fields" });
     const today = new Date().toISOString().split("T")[0];
-    const stmt = db.prepare("INSERT OR REPLACE INTO customer_pricing (customer_id, cylinder_type, price) VALUES (?, ?, ?)");
+    const stmt = db.prepare(
+      "INSERT OR REPLACE INTO customer_pricing (customer_id, cylinder_type, price, fixed_price, fixed_from, fixed_to) VALUES (?, ?, ?, ?, ?, ?)"
+    );
     const histStmt = db.prepare("INSERT INTO price_history (customer_id, cylinder_type, price, effective_from) VALUES (?, ?, ?, ?)");
     const cylinderTypeData = db.prepare("SELECT default_price FROM cylinder_types WHERE id = ?").get(cylinder_type);
+    let updated = 0;
+    let skippedFixed = 0;
     const apply = db.transaction(() => {
       for (const custId of customer_ids) {
+        // Check if customer has an active fixed price contract
+        const existing = db.prepare("SELECT * FROM customer_pricing WHERE customer_id = ? AND cylinder_type = ?").get(custId, cylinder_type);
+        if (existing?.fixed_price && existing.fixed_from && existing.fixed_to) {
+          if (today >= existing.fixed_from && today <= existing.fixed_to) {
+            skippedFixed++;
+            continue; // Skip — fixed price is active
+          }
+        }
+
         let newPrice;
         if (mode === "percentage" && percentage) {
-          const existing = db.prepare("SELECT price FROM customer_pricing WHERE customer_id = ? AND cylinder_type = ?").get(custId, cylinder_type);
           const basePrice = existing ? existing.price : (cylinderTypeData?.default_price || 0);
           newPrice = Math.round(basePrice * (1 + percentage / 100) * 100) / 100;
         } else {
           newPrice = price;
         }
-        stmt.run(custId, cylinder_type, newPrice);
+        // Preserve fixed price fields if they exist but are expired
+        stmt.run(custId, cylinder_type, newPrice, existing?.fixed_price || 0, existing?.fixed_from || "", existing?.fixed_to || "");
         histStmt.run(custId, cylinder_type, newPrice, today);
+        updated++;
       }
     });
     apply();
-    res.json({ success: true, updated: customer_ids.length });
+    res.json({ success: true, updated, skippedFixed });
   });
 
   // ============================================================
@@ -298,11 +705,20 @@ module.exports = function createRoutes(db) {
     const recentTx = db.prepare("SELECT * FROM transactions ORDER BY date DESC, created DESC LIMIT 10").all();
     const lastSync = db.prepare("SELECT * FROM optimoroute_sync_log ORDER BY created DESC LIMIT 1").get();
     const orImported = db.prepare("SELECT COUNT(*) as c FROM transactions WHERE source = 'optimoroute'").get().c;
+
+    // Order stats
+    const ordersOpen = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status = 'open'").get().c;
+    const ordersConfirmed = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status = 'confirmed'").get().c;
+    const ordersCompleted = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status = 'completed'").get().c;
+    const ordersTotal = db.prepare("SELECT COUNT(*) as c FROM orders").get().c;
+    const recentOrders = db.prepare("SELECT o.*, c.name as customer_name_lookup FROM orders o LEFT JOIN customers c ON c.id = o.customer_id ORDER BY o.order_date DESC, o.created DESC LIMIT 10").all();
+
     res.json({
       total_customers: totalCustomers, total_on_hand: onHandResult.total,
       total_deliveries: totalDeliveries, total_returns: totalReturns, total_sales: totalSales,
       recent_transactions: recentTx,
       optimoroute: { last_sync: lastSync || null, total_imported: orImported },
+      orders: { open: ordersOpen, confirmed: ordersConfirmed, completed: ordersCompleted, total: ordersTotal, recent: recentOrders },
     });
   });
 
@@ -576,13 +992,24 @@ module.exports = function createRoutes(db) {
 
       doImport();
 
+      // ── Also update CylinderTrack orders that have been completed in OptimoRoute ──
+      let ordersCompleted = 0;
+      const ctOrders = db.prepare("SELECT * FROM orders WHERE optimoroute_id != '' AND status != 'completed'").all();
+      for (const ctOrder of ctOrders) {
+        const completion = completionMap[ctOrder.optimoroute_id];
+        if (completion?.data?.status === "success") {
+          db.prepare("UPDATE orders SET status = 'completed', updated = datetime('now') WHERE id = ?").run(ctOrder.id);
+          ordersCompleted++;
+        }
+      }
+
       db.prepare(
         "INSERT INTO optimoroute_sync_log (sync_date, orders_fetched, orders_imported, orders_skipped, errors) VALUES (?, ?, ?, ?, ?)"
-      ).run(`${dateFrom} to ${dateTo}`, allOrders.length, imported, skipped, "");
+      ).run(`${dateFrom} to ${dateTo}`, allOrders.length, imported, skipped, ordersCompleted > 0 ? `${ordersCompleted} orders marked completed` : "");
 
       res.json({
         success: true,
-        summary: { dateRange: `${dateFrom} to ${dateTo}`, totalFetched: allOrders.length, imported, skipped },
+        summary: { dateRange: `${dateFrom} to ${dateTo}`, totalFetched: allOrders.length, imported, skipped, ordersCompleted },
         importedOrders, skippedOrders,
       });
     } catch (err) {
@@ -655,13 +1082,13 @@ module.exports = function createRoutes(db) {
       db.prepare("DELETE FROM cylinder_types").run();
       const ctStmt = db.prepare("INSERT INTO cylinder_types (id, label, default_price, gas_group, item_type, sort_order) VALUES (?, ?, ?, ?, ?, ?)");
       for (const ct of data.cylinder_types) ctStmt.run(ct.id, ct.label, ct.default_price || 0, ct.gas_group || "", ct.item_type || "cylinder", ct.sort_order || 0);
-      const cStmt = db.prepare("INSERT INTO customers (id, name, contact, phone, email, address, notes, onedrive_link, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-      for (const c of data.customers) cStmt.run(c.id, c.name, c.contact || "", c.phone || "", c.email || "", c.address || "", c.notes || "", c.onedrive_link || "", c.created || new Date().toISOString());
+      const cStmt = db.prepare("INSERT INTO customers (id, name, contact, phone, email, address, notes, onedrive_link, payment_ref, cc_encrypted, account_customer, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      for (const c of data.customers) cStmt.run(c.id, c.name, c.contact || "", c.phone || "", c.email || "", c.address || "", c.notes || "", c.onedrive_link || "", c.payment_ref || "", c.cc_encrypted || "", c.account_customer || 0, c.created || new Date().toISOString());
       const tStmt = db.prepare("INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
       for (const t of data.transactions) tStmt.run(t.id, t.customer_id, t.cylinder_type, t.type, t.qty, t.date, t.notes || "", t.source || "manual", t.optimoroute_order || "", t.created || new Date().toISOString());
       if (data.customer_pricing) {
-        const pStmt = db.prepare("INSERT INTO customer_pricing (customer_id, cylinder_type, price) VALUES (?, ?, ?)");
-        for (const p of data.customer_pricing) pStmt.run(p.customer_id, p.cylinder_type, p.price);
+        const pStmt = db.prepare("INSERT INTO customer_pricing (customer_id, cylinder_type, price, fixed_price, fixed_from, fixed_to) VALUES (?, ?, ?, ?, ?, ?)");
+        for (const p of data.customer_pricing) pStmt.run(p.customer_id, p.cylinder_type, p.price, p.fixed_price || 0, p.fixed_from || "", p.fixed_to || "");
       }
       if (data.settings) {
         const sStmt = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
@@ -718,47 +1145,56 @@ function parseQty(val) {
 function parseCylinderFromText(text, cylinderTypes) {
   if (!text || cylinderTypes.length === 0) return { cylinderType: null, qty: 0 };
 
-  const lower = text.toLowerCase();
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
 
-  // Pattern 1: NxSIZE (e.g. "2x45", "1x9", "3x45")
-  const nxMatch = lower.match(/(\d+)\s*x\s*(\d+)/);
+  // Pattern 1: NxSIZE with decimals (e.g. "2x45", "1x8.5", "3x45")
+  const nxMatch = lower.match(/^(\d+)\s*x\s*([\d.]+)/);
   if (nxMatch) {
     const qty = parseInt(nxMatch[1]);
-    const size = nxMatch[2]; // e.g. "45", "9"
+    const size = nxMatch[2]; // e.g. "45", "8.5"
 
-    // Find a cylinder type whose label contains this size number
     for (const ct of cylinderTypes) {
       const label = ct.label.toLowerCase();
-      // Match "45" in "45kg lpg" — ensure it's a word boundary, not matching "245"
-      const sizeRegex = new RegExp(`\\b${size}\\b|^${size}kg|^${size}\\s*kg`);
-      if (sizeRegex.test(label) || label.startsWith(size + "kg") || label.startsWith(size + " kg")) {
+      const sizeRegex = new RegExp(`\\b${size.replace('.', '\\.')}\\b|^${size.replace('.', '\\.')}kg|^${size.replace('.', '\\.')}\\s*kg`);
+      if (sizeRegex.test(label) || label === size || label.startsWith(size + "kg") || label.startsWith(size + " kg") || label.startsWith(size + " ")) {
         return { cylinderType: ct, qty };
       }
     }
-
-    // Looser match: just check if the label contains the number
+    // Looser: label contains the size
     for (const ct of cylinderTypes) {
-      if (ct.label.includes(size)) {
+      if (ct.label.toLowerCase().includes(size)) return { cylinderType: ct, qty };
+    }
+  }
+
+  // Pattern 2: "N WORD" or "N WORD extra" (e.g. "2 Cage", "2 Cage acc", "1 cage")
+  const nWordMatch = lower.match(/^(\d+)\s+([a-z][a-z\s]*)/);
+  if (nWordMatch) {
+    const qty = parseInt(nWordMatch[1]);
+    const word = nWordMatch[2].trim();
+    for (const ct of cylinderTypes) {
+      const label = ct.label.toLowerCase();
+      if (label.includes(word) || word.includes(label)) {
         return { cylinderType: ct, qty };
       }
     }
   }
 
-  // Pattern 2: Just a size like "45kg" or "9kg" in the text
-  const kgMatch = lower.match(/(\d+)\s*kg/);
+  // Pattern 3: Just a size like "45kg" or "8.5kg"
+  const kgMatch = lower.match(/([\d.]+)\s*kg/);
   if (kgMatch) {
     const size = kgMatch[1];
     for (const ct of cylinderTypes) {
       const label = ct.label.toLowerCase();
-      if (label.includes(size + "kg") || label.includes(size + " kg")) {
+      if (label.includes(size + "kg") || label.includes(size + " kg") || label === size) {
         return { cylinderType: ct, qty: 1 };
       }
     }
   }
 
-  // Pattern 3: Direct label match (e.g. notes say "Oxygen" and label is "Oxygen")
+  // Pattern 4: Direct label match (e.g. "Cage", "Oxygen")
   for (const ct of cylinderTypes) {
-    if (lower.includes(ct.label.toLowerCase())) {
+    if (lower.includes(ct.label.toLowerCase()) || ct.label.toLowerCase().includes(lower)) {
       return { cylinderType: ct, qty: 1 };
     }
   }
@@ -851,6 +1287,14 @@ function extractStreetCore(norm) {
  * Falls back to current customer_pricing, then to the cylinder type default.
  */
 function getPriceForDate(db, customerId, cylinderTypeId, date, defaultPrice) {
+  // Check if customer has a fixed price contract active for this date
+  const fixedEntry = db.prepare(
+    "SELECT price, fixed_price, fixed_from, fixed_to FROM customer_pricing WHERE customer_id = ? AND cylinder_type = ?"
+  ).get(customerId, cylinderTypeId);
+  if (fixedEntry?.fixed_price && fixedEntry.fixed_from && fixedEntry.fixed_to && date >= fixedEntry.fixed_from && date <= fixedEntry.fixed_to) {
+    return fixedEntry.price; // Fixed contract price takes priority
+  }
+
   // Check price history — find the latest entry effective on or before this date
   const histEntry = db.prepare(`
     SELECT price FROM price_history
@@ -860,10 +1304,7 @@ function getPriceForDate(db, customerId, cylinderTypeId, date, defaultPrice) {
   if (histEntry) return histEntry.price;
 
   // Fallback to current pricing table
-  const currentPrice = db.prepare(
-    "SELECT price FROM customer_pricing WHERE customer_id = ? AND cylinder_type = ?"
-  ).get(customerId, cylinderTypeId);
-  if (currentPrice) return currentPrice.price;
+  if (fixedEntry) return fixedEntry.price;
 
   return defaultPrice || 0;
 }

@@ -43,13 +43,53 @@ function initDB() {
       address TEXT DEFAULT '',
       notes TEXT DEFAULT '',
       onedrive_link TEXT DEFAULT '',
+      payment_ref TEXT DEFAULT '',
+      cc_encrypted TEXT DEFAULT '',
+      account_customer INTEGER DEFAULT 0,
       created TEXT DEFAULT (date('now')),
       updated TEXT DEFAULT (datetime('now'))
     )
   `);
 
-  // Migration: add onedrive_link if missing
+  // Migration: add columns if missing
   try { db.exec("ALTER TABLE customers ADD COLUMN onedrive_link TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE customers ADD COLUMN payment_ref TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE customers ADD COLUMN cc_encrypted TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE customers ADD COLUMN account_customer INTEGER DEFAULT 0"); } catch(e) { /* exists */ }
+
+  // --- ORDERS ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT NOT NULL,
+      address TEXT DEFAULT '',
+      customer_name TEXT DEFAULT '',
+      order_detail TEXT DEFAULT '',
+      cylinder_type_id TEXT DEFAULT '',
+      qty INTEGER DEFAULT 1,
+      unit_price REAL DEFAULT 0,
+      total_price REAL DEFAULT 0,
+      notes TEXT DEFAULT '',
+      order_date TEXT NOT NULL,
+      payment TEXT DEFAULT '',
+      payment_ref TEXT DEFAULT '',
+      payment_confirmed INTEGER DEFAULT 0,
+      optimoroute_id TEXT DEFAULT '',
+      status TEXT DEFAULT 'open',
+      created TEXT DEFAULT (datetime('now')),
+      updated TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (customer_id) REFERENCES customers(id)
+    )
+  `);
+
+  // Migration for orders
+  try { db.exec("ALTER TABLE orders ADD COLUMN payment_confirmed INTEGER DEFAULT 0"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE orders ADD COLUMN optimoroute_id TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE orders ADD COLUMN cylinder_type_id TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE orders ADD COLUMN price REAL DEFAULT 0"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE orders ADD COLUMN qty INTEGER DEFAULT 1"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE orders ADD COLUMN unit_price REAL DEFAULT 0"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE orders ADD COLUMN total_price REAL DEFAULT 0"); } catch(e) { /* exists */ }
 
   // --- CYLINDER TYPES ---
   db.exec(`
@@ -88,17 +128,25 @@ function initDB() {
   try { db.exec("ALTER TABLE transactions ADD COLUMN source TEXT DEFAULT 'manual'"); } catch(e) { /* exists */ }
   try { db.exec("ALTER TABLE transactions ADD COLUMN optimoroute_order TEXT DEFAULT ''"); } catch(e) { /* exists */ }
 
-  // --- CUSTOMER PRICING (with price history) ---
+  // --- CUSTOMER PRICING (with price history + fixed price contracts) ---
   db.exec(`
     CREATE TABLE IF NOT EXISTS customer_pricing (
       customer_id TEXT NOT NULL,
       cylinder_type TEXT NOT NULL,
       price REAL NOT NULL,
+      fixed_price INTEGER DEFAULT 0,
+      fixed_from TEXT DEFAULT '',
+      fixed_to TEXT DEFAULT '',
       PRIMARY KEY (customer_id, cylinder_type),
       FOREIGN KEY (customer_id) REFERENCES customers(id),
       FOREIGN KEY (cylinder_type) REFERENCES cylinder_types(id)
     )
   `);
+
+  // Migrations for fixed price fields
+  try { db.exec("ALTER TABLE customer_pricing ADD COLUMN fixed_price INTEGER DEFAULT 0"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE customer_pricing ADD COLUMN fixed_from TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE customer_pricing ADD COLUMN fixed_to TEXT DEFAULT ''"); } catch(e) { /* exists */ }
 
   // --- PRICE HISTORY (locked-in prices per effective date) ---
   db.exec(`

@@ -35,6 +35,8 @@ const api = {
   createCustomer: (data) => request("/customers", { method: "POST", body: JSON.stringify(data) }),
   updateCustomer: (id, data) => request(`/customers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteCustomer: (id) => request(`/customers/${id}`, { method: "DELETE" }),
+  revealCC: (id) => request(`/customers/${id}/reveal-cc`),
+  deleteCC: (id) => request(`/customers/${id}/cc`, { method: "DELETE" }),
 
   // Cylinder Types
   getCylinderTypes: () => request("/cylinder-types"),
@@ -52,10 +54,13 @@ const api = {
 
   // On-hand
   getOnHand: () => request("/on-hand"),
+  getOnHandAsAt: (date) => request(`/on-hand/as-at?date=${encodeURIComponent(date)}`),
+  generateRentalInvoices: (date, customers) => request("/on-hand/generate-invoices", { method: "POST", body: JSON.stringify({ date, customers }) }),
 
   // Pricing
   getPricing: () => request("/pricing"),
-  setPrice: (custId, typeId, price) => request(`/pricing/${custId}/${typeId}`, { method: "PUT", body: JSON.stringify({ price }) }),
+  getCustomerPriceList: (custId) => request(`/pricing/customer/${custId}`),
+  setPrice: (custId, typeId, data) => request(`/pricing/${custId}/${typeId}`, { method: "PUT", body: JSON.stringify(data) }),
   deletePrice: (custId, typeId) => request(`/pricing/${custId}/${typeId}`, { method: "DELETE" }),
   bulkPrice: (data) => request("/pricing/bulk", { method: "POST", body: JSON.stringify(data) }),
 
@@ -67,6 +72,23 @@ const api = {
 
   // Stats
   getStats: () => request("/stats"),
+
+  // Opening Balances
+  addOpeningBalance: (data) => request("/opening-balance", { method: "POST", body: JSON.stringify(data) }),
+  bulkOpeningBalance: (entries) => request("/opening-balance/bulk", { method: "POST", body: JSON.stringify({ entries }) }),
+
+  // Orders
+  getOrders: (params) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/orders${qs ? "?" + qs : ""}`);
+  },
+  createOrder: (data) => request("/orders", { method: "POST", body: JSON.stringify(data) }),
+  updateOrder: (id, data) => request(`/orders/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteOrder: (id) => request(`/orders/${id}`, { method: "DELETE" }),
+  confirmPayment: (id) => request(`/orders/${id}/confirm-payment`, { method: "POST" }),
+  resendOrder: (id) => request(`/orders/${id}/resend`, { method: "POST" }),
+  lookupPrice: (customer_id, order_detail) => request(`/orders/lookup-price?customer_id=${encodeURIComponent(customer_id || "")}&order_detail=${encodeURIComponent(order_detail || "")}`),
+  updateCustomerPrice: (data) => request("/orders/update-customer-price", { method: "POST", body: JSON.stringify(data) }),
 
   // Search
   search: (q) => request(`/search?q=${encodeURIComponent(q)}`),

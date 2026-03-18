@@ -88,6 +88,68 @@ class OptimoRouteClient {
     return res.json();
   }
 
+  // Create order in OptimoRoute
+  async createOrder({ customerName, address, payment, order, notes, date }) {
+    const url = `${BASE_URL}/create_order?key=${this.apiKey}`;
+    const body = {
+      operation: "CREATE",
+      orderNo: "",
+      type: "T",
+      date: date,
+      duration: 5,
+      location: {
+        address: address,
+        locationName: address,
+        acceptPartialMatch: true,
+        acceptMultipleResults: true,
+      },
+      notes: notes || "",
+      customFields: {
+        customer_name: customerName || "",
+        payment: payment || "",
+        order: order || "",
+      },
+    };
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`create_order failed: ${res.status} ${res.statusText}`);
+    return res.json();
+  }
+
+  // Update existing order in OptimoRoute using SYNC operation (by id)
+  async syncOrder({ id, customerName, address, payment, order, notes, date }) {
+    const url = `${BASE_URL}/create_order?key=${this.apiKey}`;
+    const body = {
+      operation: "SYNC",
+      id: id,
+      type: "T",
+      date: date,
+      duration: 5,
+      location: {
+        address: address,
+        locationName: address,
+        acceptPartialMatch: true,
+        acceptMultipleResults: true,
+      },
+      notes: notes || "",
+      customFields: {
+        customer_name: customerName || "",
+        payment: payment || "",
+        order: order || "",
+      },
+    };
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`sync_order failed: ${res.status} ${res.statusText}`);
+    return res.json();
+  }
+
   // Test connection
   async testConnection() {
     try {
