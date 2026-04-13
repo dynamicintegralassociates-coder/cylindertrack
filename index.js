@@ -26,7 +26,7 @@ app.use("/api", createAuth(db));
 app.use("/api", requireAuth(db), createRoutes(db));
 
 // Serve static frontend in production
-const clientBuild = path.join(__dirname, "../client/dist");
+const clientBuild = path.join(__dirname, "client/dist");
 app.use(express.static(clientBuild));
 app.get("*", (req, res) => {
   if (!req.path.startsWith("/api")) {
