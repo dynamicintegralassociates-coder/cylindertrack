@@ -2,5 +2,34 @@ node_modules/
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
 client/dist/
 .env
+
+# Development and backup files
+* copy*.js
+* copy*.jsx
+* copy*.json
+fix-admin.js
+find_marsha.js
+check_settings.js
+update_auto_push.js
+update_settings.js
+setup-github.sh
+
+# IDE and editor files
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

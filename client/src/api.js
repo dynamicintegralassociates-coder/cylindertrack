@@ -35,6 +35,9 @@ const api = {
   createCustomer: (data) => request("/customers", { method: "POST", body: JSON.stringify(data) }),
   updateCustomer: (id, data) => request(`/customers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteCustomer: (id) => request(`/customers/${id}`, { method: "DELETE" }),
+  getCustomerOrders: (id) => request(`/customers/${id}/orders`),
+  getLastSalePrice: (id) => request(`/customers/${id}/last-sale-price`),
+  importCustomers: (rows) => request("/admin/customers/import", { method: "POST", body: JSON.stringify({ rows }) }),
   revealCC: (id) => request(`/customers/${id}/reveal-cc`),
   deleteCC: (id) => request(`/customers/${id}/cc`, { method: "DELETE" }),
 
@@ -56,6 +59,18 @@ const api = {
   getOnHand: () => request("/on-hand"),
   getOnHandAsAt: (date) => request(`/on-hand/as-at?date=${encodeURIComponent(date)}`),
   generateRentalInvoices: (date, customers) => request("/on-hand/generate-invoices", { method: "POST", body: JSON.stringify({ date, customers }) }),
+
+  // Rental cycles
+  getSaleCap: (custId, saleTypeId) => request(`/rentals/sale-cap/${custId}/${saleTypeId}`),
+  initializeRentals: () => request("/rentals/initialize", { method: "POST" }),
+  runDueRentals: () => request("/rentals/run-due", { method: "POST" }),
+  generateRentalsForce: (customerIds) => request("/rentals/generate-now", { method: "POST", body: JSON.stringify({ customer_ids: customerIds || [] }) }),
+
+  // Email
+  getEmailConfig: () => request("/email/config"),
+  sendInvoiceEmail: (invoiceId, recipientOverride) => request(`/invoices/${invoiceId}/email`, { method: "POST", body: JSON.stringify({ recipient_override: recipientOverride || null }) }),
+  sendInvoiceEmailBulk: (invoiceIds) => request("/invoices/email-bulk", { method: "POST", body: JSON.stringify({ invoice_ids: invoiceIds }) }),
+  getEmailLog: (limit) => request(`/admin/email-log${limit ? `?limit=${limit}` : ""}`),
 
   // Pricing
   getPricing: () => request("/pricing"),
@@ -87,8 +102,42 @@ const api = {
   deleteOrder: (id) => request(`/orders/${id}`, { method: "DELETE" }),
   confirmPayment: (id) => request(`/orders/${id}/confirm-payment`, { method: "POST" }),
   resendOrder: (id) => request(`/orders/${id}/resend`, { method: "POST" }),
+  matchCreditToOrder: (id) => request(`/orders/${id}/match-credit`, { method: "POST" }),
+  // Round 3
+  pushOrderToOptimo: (id) => request(`/orders/${id}/push-to-optimo`, { method: "POST" }),
+  markLineDelivered: (orderId, lineId, data) => request(`/orders/${orderId}/lines/${lineId}/deliver`, { method: "POST", body: JSON.stringify(data || {}) }),
+  cancelLine: (orderId, lineId) => request(`/orders/${orderId}/lines/${lineId}/cancel`, { method: "POST" }),
+  // 3.0.10: Manual completion for Optimo failsafe (Del/Ret/Roth per line)
+  manualCompletion: (orderId, lineId, payload) => request(`/orders/${orderId}/lines/${lineId}/manual-completion`, { method: "POST", body: JSON.stringify(payload) }),
+  // 3.0.12: Batch version — submit all per-line completions at once
+  manualCompletionBatch: (orderId, payload) => request(`/orders/${orderId}/manual-completion-batch`, { method: "POST", body: JSON.stringify(payload) }),
+  getRound3Settings: () => request("/admin/settings/round3"),
+  updateRound3Settings: (data) => request("/admin/settings/round3", { method: "PUT", body: JSON.stringify(data) }),
   lookupPrice: (customer_id, order_detail) => request(`/orders/lookup-price?customer_id=${encodeURIComponent(customer_id || "")}&order_detail=${encodeURIComponent(order_detail || "")}`),
+  getCustomerCylinderPrice: (custId, ctId) => request(`/pricing/customer/${custId}/cylinder/${ctId}`),
+  getOrder: (id) => request(`/orders/${id}`),
   updateCustomerPrice: (data) => request("/orders/update-customer-price", { method: "POST", body: JSON.stringify(data) }),
+
+  // Invoices
+  getInvoices: (params) => {
+    const qs = new URLSearchParams(params || {}).toString();
+    return request(`/invoices${qs ? "?" + qs : ""}`);
+  },
+  getInvoice: (id) => request(`/invoices/${id}`),
+  recordInvoicePayment: (id, data) => request(`/invoices/${id}/payment`, { method: "POST", body: JSON.stringify(data) }),
+
+  // Customer balance
+  getCustomerBalance: (id) => request(`/customers/${id}/balance`),
+  recalculateAllBalances: () => request("/customers/recalculate-balances", { method: "POST" }),
+
+  // Credit notes
+  getCredits: (params) => {
+    const qs = new URLSearchParams(params || {}).toString();
+    return request(`/credits${qs ? "?" + qs : ""}`);
+  },
+  createCredit: (data) => request("/credits", { method: "POST", body: JSON.stringify(data) }),
+  approveCredit: (id) => request(`/credits/${id}/approve`, { method: "POST" }),
+  rejectCredit: (id) => request(`/credits/${id}/reject`, { method: "POST" }),
 
   // Search
   search: (q) => request(`/search?q=${encodeURIComponent(q)}`),

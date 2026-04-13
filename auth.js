@@ -37,15 +37,38 @@ module.exports = function createAuth(db) {
 
   // Login
   router.post("/auth/login", (req, res) => {
-    const { username, password } = req.body;
-    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username?.trim()?.toLowerCase());
-    if (!user || !bcrypt.compareSync(password, user.password)) {
-      return res.status(401).json({ error: "Invalid credentials" });
+    try {
+      const { username, password } = req.body || {};
+      if (!username || !password) {
+        return res.status(400).json({ error: "Username and password required" });
+      }
+      const user = db.prepare("SELECT * FROM users WHERE username = ?").get(String(username).trim().toLowerCase());
+      if (!user) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      // bcrypt.compareSync can throw on corrupt hashes — guard it explicitly
+      let ok = false;
+      try {
+        ok = bcrypt.compareSync(String(password), user.password || "");
+      } catch (cmpErr) {
+        console.error("[auth/login] bcrypt compare threw for user", user.username, cmpErr.message);
+        return res.status(500).json({ error: "Authentication error — password hash may be corrupt. Run fix-admin.js to reset." });
+      }
+      if (!ok) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      const token = uid();
+      db.prepare("INSERT INTO sessions (token, user_id) VALUES (?, ?)").run(token, user.id);
+      res.cookie("ct_session", token, { httpOnly: true, sameSite: "lax", maxAge: 30 * 24 * 60 * 60 * 1000 });
+      res.json({ success: true, user: { username: user.username, role: user.role } });
+    } catch (err) {
+      console.error("[auth/login] EXCEPTION:", err);
+      console.error("[auth/login] Stack:", err.stack);
+      return res.status(500).json({
+        error: err.message || "Internal server error during login",
+        details: err.stack ? err.stack.split("\n").slice(0, 3).join(" | ") : null,
+      });
     }
-    const token = uid();
-    db.prepare("INSERT INTO sessions (token, user_id) VALUES (?, ?)").run(token, user.id);
-    res.cookie("ct_session", token, { httpOnly: true, sameSite: "lax", maxAge: 30 * 24 * 60 * 60 * 1000 });
-    res.json({ success: true, user: { username: user.username, role: user.role } });
   });
 
   // Logout

@@ -1,14 +1,20 @@
 {
   "name": "cylindertrack",
-  "version": "2.1.0",
+  "version": "3.0.18",
   "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "node server/index.js",
     "dev:client": "cd client && npm run dev",
     "build": "cd client && npm run build",
     "start": "node server/index.js",
-    "setup": "npm install && cd client && npm install"
+    "test": "node --test tests/",
+    "setup": "npm install && cd client && npm install",
+    "postinstall": "npm rebuild better-sqlite3 || echo 'better-sqlite3 rebuild skipped'",
+    "rebuild-native": "npm rebuild better-sqlite3"
   },
   "dependencies": {
     "better-sqlite3": "^11.6.0",
@@ -17,6 +23,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "express": "^4.21.1",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "pdfkit": "^0.15.0"
   }
 }

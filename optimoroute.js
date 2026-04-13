@@ -89,14 +89,14 @@ class OptimoRouteClient {
   }
 
   // Create order in OptimoRoute
-  async createOrder({ customerName, address, payment, order, notes, date }) {
+  async createOrder({ customerName, address, payment, order, notes, date, duration }) {
     const url = `${BASE_URL}/create_order?key=${this.apiKey}`;
     const body = {
       operation: "CREATE",
       orderNo: "",
       type: "T",
       date: date,
-      duration: 5,
+      duration: duration || 5,
       location: {
         address: address,
         locationName: address,
@@ -120,14 +120,14 @@ class OptimoRouteClient {
   }
 
   // Update existing order in OptimoRoute using SYNC operation (by id)
-  async syncOrder({ id, customerName, address, payment, order, notes, date }) {
+  async syncOrder({ id, customerName, address, payment, order, notes, date, duration }) {
     const url = `${BASE_URL}/create_order?key=${this.apiKey}`;
     const body = {
       operation: "SYNC",
       id: id,
       type: "T",
       date: date,
-      duration: 5,
+      duration: duration || 5,
       location: {
         address: address,
         locationName: address,
