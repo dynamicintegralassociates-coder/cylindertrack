@@ -4,6 +4,7 @@ const { OptimoRouteClient } = require("./optimoroute");
 const { encrypt, decrypt, maskCard } = require("./crypto");
 const emailModule = require("./email");
 const { parseCylinderFromText } = require("./parser"); // 3.0.18: extracted for unit testing
+const { logAudit, logCreate, logUpdate, logDelete, snapshot } = require("./audit");
 
 const uid = () => nodeCrypto.randomBytes(6).toString("hex");
 
@@ -260,6 +261,8 @@ module.exports = function createRoutes(db) {
       chain ? 1 : 0, alternative_contact_name || "", alternative_contact_phone || "", compliance_not_required ? 1 : 0
     );
     const abnCheck = validateABN(abn);
+    logCreate(db, req, "customers", id, snapshot(db, "customers", id),
+      `Created customer ${accountNumber} — ${(name || "").trim() || address || "(unnamed)"}`);
     res.json({
       id, name: (name || "").trim(), account_number: accountNumber,
       abn_warning: !abnCheck.valid ? abnCheck.reason : null,
@@ -277,6 +280,9 @@ module.exports = function createRoutes(db) {
     const isResidential = (customer_category || "").toLowerCase() === "residential";
     if (!isResidential && !name?.trim()) return res.status(400).json({ error: "Name is required" });
     if (isResidential && !name?.trim() && !address?.trim()) return res.status(400).json({ error: "Either name or address is required" });
+
+    // Capture before-state for audit log
+    const beforeRow = snapshot(db, "customers", req.params.id);
 
     // Internal notes: take existing array, prepend a new note (with timestamp) if provided
     const existing = db.prepare("SELECT internal_notes FROM customers WHERE id = ?").get(req.params.id);
@@ -315,6 +321,8 @@ module.exports = function createRoutes(db) {
       db.prepare(`UPDATE customers SET ${baseCols} WHERE id=?`).run(...baseVals, req.params.id);
     }
     const abnCheck = validateABN(abn);
+    logUpdate(db, req, "customers", req.params.id, beforeRow, snapshot(db, "customers", req.params.id),
+      `Updated customer ${beforeRow?.account_number || req.params.id} — ${(name || "").trim() || "(unnamed)"}`);
     res.json({ success: true, abn_warning: !abnCheck.valid ? abnCheck.reason : null });
   });
 
@@ -331,7 +339,14 @@ module.exports = function createRoutes(db) {
 
   // Delete CC from file
   router.delete("/customers/:id/cc", (req, res) => {
+    const before = snapshot(db, "customers", req.params.id);
     db.prepare("UPDATE customers SET cc_encrypted = '' WHERE id = ?").run(req.params.id);
+    logAudit(db, req, {
+      action: "cc_removed",
+      table: "customers",
+      record_id: req.params.id,
+      summary: `Removed stored credit card for ${before?.name || req.params.id}`,
+    });
     res.json({ success: true });
   });
 
@@ -368,8 +383,11 @@ module.exports = function createRoutes(db) {
   router.delete("/customers/:id", (req, res) => {
     const txCount = db.prepare("SELECT COUNT(*) as c FROM transactions WHERE customer_id = ?").get(req.params.id).c;
     if (txCount > 0) return res.status(400).json({ error: "Cannot delete customer with transactions" });
+    const before = snapshot(db, "customers", req.params.id);
     db.prepare("DELETE FROM customer_pricing WHERE customer_id = ?").run(req.params.id);
     db.prepare("DELETE FROM customers WHERE id = ?").run(req.params.id);
+    logDelete(db, req, "customers", req.params.id, before,
+      `Deleted customer ${before?.account_number || req.params.id} — ${before?.name || "(unnamed)"}`);
     res.json({ success: true });
   });
 
@@ -587,23 +605,31 @@ module.exports = function createRoutes(db) {
     db.prepare(
       "INSERT INTO cylinder_types (id, label, default_price, gas_group, item_type, sort_order, linked_sale_item_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
     ).run(id, label.trim(), default_price || 0, gas_group || "", item_type || "cylinder", sort_order || 0, linked_sale_item_id || "");
+    logCreate(db, req, "cylinder_types", id, snapshot(db, "cylinder_types", id),
+      `Created cylinder type: ${label.trim()} @ $${default_price || 0}`);
     res.json({ id, label: label.trim() });
   });
 
   router.put("/cylinder-types/:id", (req, res) => {
     const { label, default_price, gas_group, item_type, sort_order, linked_sale_item_id } = req.body;
     if (!label?.trim()) return res.status(400).json({ error: "Label is required" });
+    const before = snapshot(db, "cylinder_types", req.params.id);
     db.prepare(
       "UPDATE cylinder_types SET label=?, default_price=?, gas_group=?, item_type=?, sort_order=?, linked_sale_item_id=? WHERE id=?"
     ).run(label.trim(), default_price || 0, gas_group || "", item_type || "cylinder", sort_order || 0, linked_sale_item_id || "", req.params.id);
+    logUpdate(db, req, "cylinder_types", req.params.id, before, snapshot(db, "cylinder_types", req.params.id),
+      `Updated cylinder type: ${label.trim()}`);
     res.json({ success: true });
   });
 
   router.delete("/cylinder-types/:id", (req, res) => {
     const txCount = db.prepare("SELECT COUNT(*) as c FROM transactions WHERE cylinder_type = ?").get(req.params.id).c;
     if (txCount > 0) return res.status(400).json({ error: "Cannot delete cylinder type with transactions" });
+    const before = snapshot(db, "cylinder_types", req.params.id);
     db.prepare("DELETE FROM customer_pricing WHERE cylinder_type = ?").run(req.params.id);
     db.prepare("DELETE FROM cylinder_types WHERE id = ?").run(req.params.id);
+    logDelete(db, req, "cylinder_types", req.params.id, before,
+      `Deleted cylinder type: ${before?.label || req.params.id}`);
     res.json({ success: true });
   });
 
@@ -697,11 +723,32 @@ module.exports = function createRoutes(db) {
       return out;
     })();
 
+    // Audit: one entry for the primary transaction, and a second if overflow
+    // created an auto-rental. Both get logged with the user who triggered them.
+    try {
+      const primary = snapshot(db, "transactions", result.id);
+      logCreate(db, req, "transactions", result.id, primary,
+        `${type} ${qtyNum} × ${ct.label} for customer ${customer_id}`);
+      if (result.overflow) {
+        logAudit(db, req, {
+          action: "create",
+          table: "transactions",
+          record_id: "",
+          after: { auto: true, overflow: result.overflow, source: "auto_overflow", date, customer_id },
+          summary: `Auto-overflow: ${result.overflow.qty} × ${result.overflow.rental_label} rental delivery`,
+        });
+      }
+    } catch (e) { /* audit must not break response */ }
+
     res.json(result);
   });
 
   router.delete("/transactions/:id", (req, res) => {
+    const before = snapshot(db, "transactions", req.params.id);
+    if (!before) return res.json({ success: true });
     db.prepare("DELETE FROM transactions WHERE id = ?").run(req.params.id);
+    logDelete(db, req, "transactions", req.params.id, before,
+      `Deleted transaction: ${before.type} ${before.qty} × ${before.cylinder_type} on ${before.date}`);
     res.json({ success: true });
   });
 
@@ -1432,6 +1479,15 @@ module.exports = function createRoutes(db) {
       push_success: pushResult?.success || false,
       push_error: pushResult?.error || null,
     });
+
+    // Audit: log the new order + its invoice as a single combined entry
+    try {
+      const orderSnap = snapshot(db, "orders", orderId);
+      logCreate(db, req, "orders", orderId, orderSnap,
+        `Created order ${orderNumber} for customer ${customer_id} — $${orderTotal.toFixed(2)} (invoice ${phase1.invoiceNumber})`);
+      logCreate(db, req, "invoices", phase1.invoiceId, snapshot(db, "invoices", phase1.invoiceId),
+        `Created invoice ${phase1.invoiceNumber} linked to order ${orderNumber}`);
+    } catch (e) { /* audit must not break response */ }
     } catch (err) {
       console.error("[POST /orders] EXCEPTION:", err);
       console.error("[POST /orders] Stack:", err.stack);
@@ -1680,6 +1736,11 @@ module.exports = function createRoutes(db) {
       push_success: pushResult?.success || false,
       push_error: pushResult?.error || null,
     });
+
+    try {
+      logUpdate(db, req, "orders", req.params.id, existing, snapshot(db, "orders", req.params.id),
+        `Updated order ${existing.order_number || req.params.id}`);
+    } catch (e) { /* audit must not break response */ }
     } catch (err) {
       console.error("[PUT /orders] EXCEPTION:", err);
       console.error("[PUT /orders] Stack:", err.stack);
@@ -1714,6 +1775,9 @@ module.exports = function createRoutes(db) {
   router.delete("/orders/:id", (req, res) => {
     const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.id);
     if (!order) return res.json({ success: true });
+    const invoiceBefore = order.invoice_id
+      ? db.prepare("SELECT * FROM invoices WHERE id = ?").get(order.invoice_id)
+      : null;
     db.transaction(() => {
       if (order.invoice_id) {
         // Void the invoice rather than hard-delete — preserves payment history
@@ -1722,6 +1786,15 @@ module.exports = function createRoutes(db) {
       db.prepare("DELETE FROM orders WHERE id = ?").run(req.params.id);
       recalculateCustomerBalance(db, order.customer_id);
     })();
+    try {
+      logDelete(db, req, "orders", req.params.id, order,
+        `Deleted order ${order.order_number || req.params.id}${order.invoice_id ? ` (voided linked invoice)` : ""}`);
+      if (invoiceBefore) {
+        logUpdate(db, req, "invoices", invoiceBefore.id, invoiceBefore,
+          snapshot(db, "invoices", invoiceBefore.id),
+          `Voided invoice ${invoiceBefore.invoice_number || invoiceBefore.id} because its order was deleted`);
+      }
+    } catch (e) { /* audit must not break response */ }
     res.json({ success: true });
   });
 
@@ -1962,6 +2035,17 @@ module.exports = function createRoutes(db) {
       push_success: pushResult?.success || false,
       push_error: pushResult?.error || null,
     });
+
+    try {
+      logAudit(db, req, {
+        action: "payment",
+        table: "invoices",
+        record_id: req.params.id,
+        before: inv,
+        after: snapshot(db, "invoices", req.params.id),
+        summary: `Payment $${amt.toFixed(2)} via ${method || "manual"} on invoice ${inv.invoice_number || req.params.id}${reference ? ` (ref ${reference})` : ""}`,
+      });
+    } catch (e) { /* audit must not break response */ }
   });
 
   // ============================================================
@@ -2386,6 +2470,10 @@ module.exports = function createRoutes(db) {
   router.put("/admin/settings/round3", (req, res) => {
     if (req.user?.role !== "admin") return res.status(403).json({ error: "Admin role required" });
     const { auto_push_enabled, auto_close_days } = req.body || {};
+    const before = {
+      auto_push_enabled: getSetting(db, "auto_push_enabled", "1"),
+      auto_close_days: getSetting(db, "auto_close_days", "14"),
+    };
     if (auto_push_enabled !== undefined) {
       db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_push_enabled', ?)").run(auto_push_enabled ? "1" : "0");
     }
@@ -2395,6 +2483,18 @@ module.exports = function createRoutes(db) {
         db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_close_days', ?)").run(String(n));
       }
     }
+    const after = {
+      auto_push_enabled: getSetting(db, "auto_push_enabled", "1"),
+      auto_close_days: getSetting(db, "auto_close_days", "14"),
+    };
+    logAudit(db, req, {
+      action: "update",
+      table: "settings",
+      record_id: "round3",
+      before,
+      after,
+      summary: `Round 3 settings: auto_push=${after.auto_push_enabled}, auto_close_days=${after.auto_close_days}`,
+    });
     res.json({
       success: true,
       auto_push_enabled: getSetting(db, "auto_push_enabled", "1") === "1",
@@ -3038,6 +3138,8 @@ module.exports = function createRoutes(db) {
        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`
     ).run(id, creditNumber, customer_id, amt, amt, reason.trim(), createdBy);
 
+    logCreate(db, req, "credit_notes", id, snapshot(db, "credit_notes", id),
+      `Created credit note ${creditNumber} for $${amt.toFixed(2)} — ${reason.trim()}`);
     res.json({ id, credit_number: creditNumber });
   });
 
@@ -3070,6 +3172,8 @@ module.exports = function createRoutes(db) {
       recalculateCustomerBalance(db, cn.customer_id);
     })();
 
+    logUpdate(db, req, "credit_notes", req.params.id, cn, snapshot(db, "credit_notes", req.params.id),
+      `Approved credit note ${cn.credit_number} for $${cn.amount.toFixed(2)}`);
     res.json({ success: true });
   });
 
@@ -3083,6 +3187,8 @@ module.exports = function createRoutes(db) {
     db.prepare(
       "UPDATE credit_notes SET status = 'rejected', approved_by = ?, approved_date = ? WHERE id = ?"
     ).run(approvedBy, new Date().toISOString().split("T")[0], req.params.id);
+    logUpdate(db, req, "credit_notes", req.params.id, cn, snapshot(db, "credit_notes", req.params.id),
+      `Rejected credit note ${cn.credit_number}`);
     res.json({ success: true });
   });
 
@@ -3376,15 +3482,32 @@ module.exports = function createRoutes(db) {
   router.put("/pricing/:custId/:typeId", (req, res) => {
     const { price, fixed_price, fixed_from, fixed_to } = req.body;
     const today = new Date().toISOString().split("T")[0];
+    const before = db.prepare("SELECT * FROM customer_pricing WHERE customer_id = ? AND cylinder_type = ?").get(req.params.custId, req.params.typeId);
     db.prepare(
       "INSERT OR REPLACE INTO customer_pricing (customer_id, cylinder_type, price, fixed_price, fixed_from, fixed_to) VALUES (?, ?, ?, ?, ?, ?)"
     ).run(req.params.custId, req.params.typeId, price, fixed_price ? 1 : 0, fixed_from || "", fixed_to || "");
     db.prepare("INSERT INTO price_history (customer_id, cylinder_type, price, effective_from) VALUES (?, ?, ?, ?)").run(req.params.custId, req.params.typeId, price, today);
+    logAudit(db, req, {
+      action: before ? "update" : "create",
+      table: "customer_pricing",
+      record_id: `${req.params.custId}:${req.params.typeId}`,
+      before,
+      after: { customer_id: req.params.custId, cylinder_type: req.params.typeId, price, fixed_price: fixed_price ? 1 : 0, fixed_from, fixed_to },
+      summary: `Set price for customer ${req.params.custId} × ${req.params.typeId}: $${Number(price).toFixed(2)}${fixed_price ? ` (fixed ${fixed_from}→${fixed_to})` : ""}`,
+    });
     res.json({ success: true });
   });
 
   router.delete("/pricing/:custId/:typeId", (req, res) => {
+    const before = db.prepare("SELECT * FROM customer_pricing WHERE customer_id = ? AND cylinder_type = ?").get(req.params.custId, req.params.typeId);
     db.prepare("DELETE FROM customer_pricing WHERE customer_id = ? AND cylinder_type = ?").run(req.params.custId, req.params.typeId);
+    logAudit(db, req, {
+      action: "delete",
+      table: "customer_pricing",
+      record_id: `${req.params.custId}:${req.params.typeId}`,
+      before,
+      summary: `Removed customer-specific price for ${req.params.custId} × ${req.params.typeId}`,
+    });
     res.json({ success: true });
   });
 
@@ -3429,6 +3552,13 @@ module.exports = function createRoutes(db) {
       }
     });
     apply();
+    logAudit(db, req, {
+      action: "bulk_update",
+      table: "customer_pricing",
+      record_id: cylinder_type,
+      after: { cylinder_type, mode, price, percentage, customers_targeted: customer_ids.length, updated, skippedFixed },
+      summary: `Bulk pricing update on ${cylinder_type}: ${mode === "percentage" ? `${percentage}%` : `$${price}`} → ${updated} customers updated, ${skippedFixed} skipped (fixed contracts)`,
+    });
     res.json({ success: true, updated, skippedFixed });
   });
 
@@ -3570,8 +3700,22 @@ module.exports = function createRoutes(db) {
 
   router.put("/settings", (req, res) => {
     const entries = Object.entries(req.body);
+    // Capture before-state for each setting being written
     const stmt = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
+    const beforeMap = {};
+    for (const [key] of entries) {
+      const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
+      beforeMap[key] = row ? row.value : null;
+    }
     db.transaction(() => { for (const [key, value] of entries) stmt.run(key, String(value)); })();
+    logAudit(db, req, {
+      action: "update",
+      table: "settings",
+      record_id: entries.map(([k]) => k).join(","),
+      before: beforeMap,
+      after: Object.fromEntries(entries.map(([k, v]) => [k, String(v)])),
+      summary: `Updated ${entries.length} setting(s): ${entries.map(([k]) => k).join(", ")}`,
+    });
     res.json({ success: true });
   });
 
@@ -4017,6 +4161,74 @@ module.exports = function createRoutes(db) {
       }
     })();
     res.json({ success: true });
+  });
+
+  // ============================================================
+  // AUDIT LOG VIEWER (admin only)
+  // ============================================================
+  // Append-only audit trail. This endpoint is read-only; there is
+  // no corresponding POST/PUT/DELETE — audit rows can only be
+  // written via the logAudit() helper from inside route handlers.
+  //
+  // Query parameters (all optional):
+  //   from         ISO date (inclusive lower bound on ts)
+  //   to           ISO date (inclusive upper bound on ts)
+  //   user_id      filter by user who performed the action
+  //   username     filter by username (exact match)
+  //   table        filter by table_name
+  //   record_id    filter by record_id (exact match)
+  //   action       filter by action (create|update|delete|login|...)
+  //   q            free-text search on summary
+  //   limit        page size (default 100, max 500)
+  //   offset       pagination offset (default 0)
+  //
+  // Returns: { rows, total, limit, offset }
+  router.get("/audit-log", (req, res) => {
+    if (req.user?.role !== "admin") return res.status(403).json({ error: "Admin role required" });
+
+    const { from, to, user_id, username, table, record_id, action, q } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    let where = "WHERE 1=1";
+    const params = [];
+    if (from)      { where += " AND ts >= ?";         params.push(from); }
+    if (to)        { where += " AND ts <= ?";         params.push(to); }
+    if (user_id)   { where += " AND user_id = ?";     params.push(user_id); }
+    if (username)  { where += " AND username = ?";    params.push(username); }
+    if (table)     { where += " AND table_name = ?";  params.push(table); }
+    if (record_id) { where += " AND record_id = ?";   params.push(record_id); }
+    if (action)    { where += " AND action = ?";      params.push(action); }
+    if (q)         { where += " AND summary LIKE ?";  params.push(`%${q}%`); }
+
+    const total = db.prepare(`SELECT COUNT(*) as c FROM audit_log ${where}`).get(...params).c;
+    const rows = db.prepare(
+      `SELECT id, ts, user_id, username, user_role, ip, action, table_name, record_id, before_json, after_json, summary
+       FROM audit_log ${where}
+       ORDER BY id DESC
+       LIMIT ? OFFSET ?`
+    ).all(...params, limit, offset);
+
+    res.json({ rows, total, limit, offset });
+  });
+
+  // Distinct users/tables/actions — populates audit viewer filter dropdowns.
+  router.get("/audit-log/facets", (req, res) => {
+    if (req.user?.role !== "admin") return res.status(403).json({ error: "Admin role required" });
+    const users   = db.prepare("SELECT DISTINCT username FROM audit_log WHERE username != '' ORDER BY username").all().map(r => r.username);
+    const tables  = db.prepare("SELECT DISTINCT table_name FROM audit_log ORDER BY table_name").all().map(r => r.table_name);
+    const actions = db.prepare("SELECT DISTINCT action FROM audit_log ORDER BY action").all().map(r => r.action);
+    res.json({ users, tables, actions });
+  });
+
+  // Full history for a single record — useful for "show me everything that
+  // ever happened to invoice INV-00042" style queries.
+  router.get("/audit-log/record/:table/:id", (req, res) => {
+    if (req.user?.role !== "admin") return res.status(403).json({ error: "Admin role required" });
+    const rows = db.prepare(
+      `SELECT * FROM audit_log WHERE table_name = ? AND record_id = ? ORDER BY id ASC`
+    ).all(req.params.table, req.params.id);
+    res.json({ rows });
   });
 
   return router;

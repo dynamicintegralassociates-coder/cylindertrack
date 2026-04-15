@@ -1,6 +1,7 @@
 const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
+const { ensureSchema: ensureAuditSchema } = require("./audit");
 
 function initDB() {
   const dbDir = process.env.DB_DIR || path.join(__dirname);
@@ -448,6 +449,11 @@ function initDB() {
     console.error("[migration v3] status migration failed:", err);
     throw err;
   }
+
+  // --- AUDIT LOG ---
+  // Append-only audit trail for compliance. Created last so it can be
+  // populated immediately from any subsequent migrations if needed.
+  ensureAuditSchema(db);
 
   return db;
 }

@@ -146,6 +146,14 @@ const api = {
   getSettings: () => request("/settings"),
   updateSettings: (data) => request("/settings", { method: "PUT", body: JSON.stringify(data) }),
 
+  // Audit log (admin only)
+  getAuditLog: (params) => {
+    const qs = new URLSearchParams(params || {}).toString();
+    return request(`/audit-log${qs ? "?" + qs : ""}`);
+  },
+  getAuditFacets: () => request("/audit-log/facets"),
+  getAuditRecordHistory: (table, id) => request(`/audit-log/record/${encodeURIComponent(table)}/${encodeURIComponent(id)}`),
+
   // Backup
   getBackup: () => request("/backup"),
   restore: (data) => request("/restore", { method: "POST", body: JSON.stringify(data) }),

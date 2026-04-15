@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const express = require("express");
+const { logAudit } = require("./audit");
 
 const uid = () => crypto.randomBytes(16).toString("hex");
 
@@ -31,6 +32,15 @@ module.exports = function createAuth(db) {
     db.prepare("INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, 'admin')").run(id, username.trim().toLowerCase(), hash);
     const token = uid();
     db.prepare("INSERT INTO sessions (token, user_id) VALUES (?, ?)").run(token, id);
+    // Synthesize req.user for the audit call (we just created the user).
+    const auditReq = { ...req, user: { id, username: username.trim().toLowerCase(), role: "admin" } };
+    logAudit(db, auditReq, {
+      action: "setup",
+      table: "users",
+      record_id: id,
+      after: { id, username: username.trim().toLowerCase(), role: "admin" },
+      summary: `Initial admin user created: ${username.trim().toLowerCase()}`,
+    });
     res.cookie("ct_session", token, { httpOnly: true, sameSite: "lax", maxAge: 30 * 24 * 60 * 60 * 1000 });
     res.json({ success: true, user: { username: username.trim().toLowerCase(), role: "admin" } });
   });
@@ -44,6 +54,12 @@ module.exports = function createAuth(db) {
       }
       const user = db.prepare("SELECT * FROM users WHERE username = ?").get(String(username).trim().toLowerCase());
       if (!user) {
+        logAudit(db, req, {
+          action: "login_failed",
+          table: "users",
+          record_id: "",
+          summary: `Failed login — unknown username: ${String(username).trim().toLowerCase()}`,
+        });
         return res.status(401).json({ error: "Invalid credentials" });
       }
       // bcrypt.compareSync can throw on corrupt hashes — guard it explicitly
@@ -55,10 +71,22 @@ module.exports = function createAuth(db) {
         return res.status(500).json({ error: "Authentication error — password hash may be corrupt. Run fix-admin.js to reset." });
       }
       if (!ok) {
+        logAudit(db, req, {
+          action: "login_failed",
+          table: "users",
+          record_id: user.id,
+          summary: `Failed login — bad password for ${user.username}`,
+        });
         return res.status(401).json({ error: "Invalid credentials" });
       }
       const token = uid();
       db.prepare("INSERT INTO sessions (token, user_id) VALUES (?, ?)").run(token, user.id);
+      logAudit(db, { ...req, user: { id: user.id, username: user.username, role: user.role } }, {
+        action: "login",
+        table: "users",
+        record_id: user.id,
+        summary: `Login success: ${user.username} (${user.role})`,
+      });
       res.cookie("ct_session", token, { httpOnly: true, sameSite: "lax", maxAge: 30 * 24 * 60 * 60 * 1000 });
       res.json({ success: true, user: { username: user.username, role: user.role } });
     } catch (err) {
@@ -74,7 +102,18 @@ module.exports = function createAuth(db) {
   // Logout
   router.post("/auth/logout", (req, res) => {
     const token = req.cookies?.ct_session;
-    if (token) db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+    if (token) {
+      const session = db.prepare("SELECT s.user_id, u.username, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?").get(token);
+      if (session) {
+        logAudit(db, { ...req, user: { id: session.user_id, username: session.username, role: session.role } }, {
+          action: "logout",
+          table: "users",
+          record_id: session.user_id,
+          summary: `Logout: ${session.username}`,
+        });
+      }
+      db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+    }
     res.clearCookie("ct_session");
     res.json({ success: true });
   });
@@ -91,6 +130,13 @@ module.exports = function createAuth(db) {
     const id = uid();
     const hash = bcrypt.hashSync(password, 10);
     db.prepare("INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)").run(id, username.trim().toLowerCase(), hash, role || "user");
+    logAudit(db, req, {
+      action: "create",
+      table: "users",
+      record_id: id,
+      after: { id, username: username.trim().toLowerCase(), role: role || "user" },
+      summary: `Admin created user: ${username.trim().toLowerCase()} (${role || "user"})`,
+    });
     res.json({ success: true });
   });
 
@@ -106,6 +152,15 @@ module.exports = function createAuth(db) {
     if (!newPassword || newPassword.length < 4) return res.status(400).json({ error: "Password must be at least 4 characters" });
     const hash = bcrypt.hashSync(newPassword, 10);
     db.prepare("UPDATE users SET password = ? WHERE id = ?").run(hash, targetId);
+    const targetUser = db.prepare("SELECT username, role FROM users WHERE id = ?").get(targetId);
+    logAudit(db, req, {
+      action: "password_change",
+      table: "users",
+      record_id: targetId,
+      summary: targetId === session.user_id
+        ? `User changed own password: ${targetUser?.username || targetId}`
+        : `Admin reset password for: ${targetUser?.username || targetId}`,
+    });
     res.json({ success: true });
   });
 
