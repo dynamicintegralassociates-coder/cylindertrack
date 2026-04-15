@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import api, { setAuthFailHandler } from "./api";
+import AuditLogView from "./AuditLog";
 
 // ==================== STYLES ====================
 const C = {
@@ -5091,6 +5092,7 @@ export default function App() {
     { id: "pricing", label: "Pricing Manager", icon: Icons.pricing },
     { id: "credits", label: "Credit Notes", icon: Icons.billing },
     { id: "users", label: "Manage Users", icon: Icons.users },
+    ...(user?.role === "admin" ? [{ id: "auditlog", label: "Audit Log", icon: Icons.settings }] : []),
     ...(user?.role === "admin" ? [{ id: "administrator", label: "Administrator", icon: Icons.settings }] : []),
   ];
 
@@ -5109,6 +5111,7 @@ export default function App() {
       case "optimoroute": return <OptimoRouteView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} refreshAll={refreshAll} />;
       case "users": return <UsersView showToast={showToast} />;
       case "credits": return <CreditsView customers={customers.data || []} showToast={showToast} userRole={user?.role} />;
+      case "auditlog": return user?.role === "admin" ? <AuditLogView showToast={showToast} /> : null;
       case "administrator": return user?.role === "admin" ? <AdministratorView showToast={showToast} /> : null;
       default: return null;
     }
