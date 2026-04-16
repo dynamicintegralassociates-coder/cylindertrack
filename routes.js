@@ -216,7 +216,10 @@ module.exports = function createRoutes(db) {
   // CUSTOMERS
   // ============================================================
   router.get("/customers", (req, res) => {
-    const rows = db.prepare("SELECT * FROM customers ORDER BY name").all();
+    const includeArchived = req.query.include_archived === "1";
+    const rows = includeArchived
+      ? db.prepare("SELECT * FROM customers ORDER BY name").all()
+      : db.prepare("SELECT * FROM customers WHERE (archived IS NULL OR archived = 0) ORDER BY name").all();
     // Return masked CC — never send encrypted blob to client
     const safe = rows.map(c => ({
       ...c,
@@ -276,7 +279,7 @@ module.exports = function createRoutes(db) {
       state, accounts_contact, accounts_email, accounts_phone, compliance_number, pressure_test, abn,
       duration, milk_run_days, milk_run_frequency, rental_frequency, customer_type,
       customer_type_start, customer_type_end, rep_name, payment_terms, internal_notes, new_internal_note, customer_category,
-      chain, alternative_contact_name, alternative_contact_phone, compliance_not_required,
+      chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, archived,
     } = req.body;
     const isResidential = (customer_category || "").toLowerCase() === "residential";
     if (!isResidential && !name?.trim()) return res.status(400).json({ error: "Name is required" });
@@ -302,7 +305,7 @@ module.exports = function createRoutes(db) {
       account_customer=?, state=?, internal_notes=?, accounts_contact=?, accounts_email=?, accounts_phone=?,
       compliance_number=?, pressure_test=?, abn=?, duration=?, milk_run_days=?, milk_run_frequency=?,
       rental_frequency=?, customer_type=?, customer_type_start=?, customer_type_end=?, rep_name=?, payment_terms=?, customer_category=?,
-      chain=?, alternative_contact_name=?, alternative_contact_phone=?, compliance_not_required=?,
+      chain=?, alternative_contact_name=?, alternative_contact_phone=?, compliance_not_required=?, archived=?,
       updated=datetime('now')`;
     const baseVals = [
       (name || "").trim(), contact || "", phone || "", email || "", address || "", notes || "",
@@ -312,7 +315,7 @@ module.exports = function createRoutes(db) {
       duration || "", milk_run_days || "", milk_run_frequency || "",
       rental_frequency || "", customer_type || "", customer_type_start || "", customer_type_end || "",
       rep_name || "", payment_terms || "", customer_category || "",
-      chain ? 1 : 0, alternative_contact_name || "", alternative_contact_phone || "", compliance_not_required ? 1 : 0,
+      chain ? 1 : 0, alternative_contact_name || "", alternative_contact_phone || "", compliance_not_required ? 1 : 0, archived ? 1 : 0,
     ];
 
     if (cc_number && cc_number.replace(/\D/g, "").length >= 4) {
@@ -379,6 +382,17 @@ module.exports = function createRoutes(db) {
       order_date: row.order_date,
       order_number: row.order_number,
     });
+  });
+
+  router.patch("/customers/:id/archive", (req, res) => {
+    const { archived } = req.body;
+    const before = snapshot(db, "customers", req.params.id);
+    if (!before) return res.status(404).json({ error: "Customer not found" });
+    db.prepare("UPDATE customers SET archived = ?, updated = datetime('now') WHERE id = ?")
+      .run(archived ? 1 : 0, req.params.id);
+    logUpdate(db, req, "customers", req.params.id, before, snapshot(db, "customers", req.params.id),
+      `${archived ? "Archived" : "Unarchived"} customer ${before.account_number || req.params.id} — ${before.name || "(unnamed)"}`);
+    res.json({ success: true });
   });
 
   router.delete("/customers/:id", (req, res) => {
@@ -794,7 +808,7 @@ module.exports = function createRoutes(db) {
   // a request to `/orders/lookup-price` would match `/orders/:id` with id="lookup-price".
   router.get("/orders/lookup-price", (req, res) => {
     const { customer_id, order_detail } = req.query;
-    if (!order_detail) return res.json({ lines: [], total: 0 });
+    if (!order_detail) return res.json({ lines: [], total: 0, _v: "v2" });
 
     const cylinderTypes = db.prepare("SELECT * FROM cylinder_types").all();
     const today = new Date().toISOString().split("T")[0];
@@ -813,6 +827,7 @@ module.exports = function createRoutes(db) {
 
     for (const item of items) {
       const parsed = parseCylinderFromText(item, cylinderTypes);
+      console.log("[lookup-price] item:", JSON.stringify(item), "-> matched:", parsed.cylinderType?.label ?? "NO MATCH");
       if (!parsed.cylinderType) {
         lines.push({ raw: item, matched: false, cylinder_label: "", cylinder_type_id: "", qty: 0, unit_price: 0, line_total: 0, is_fixed: false });
         continue;
@@ -847,6 +862,7 @@ module.exports = function createRoutes(db) {
       qty: first.qty || 0,
       cylinder_type_id: first.cylinder_type_id || "",
       cylinder_label: first.cylinder_label || "",
+      _v: "v2",
     });
   });
 

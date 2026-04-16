@@ -805,7 +805,7 @@ const EMPTY_CUSTOMER_FORM = {
   customer_type: "", customer_type_start: "", customer_type_end: "",
   rep_name: "", payment_terms: "", new_internal_note: "", customer_category: "",
   chain: false, alternative_contact_name: "", alternative_contact_phone: "",
-  compliance_not_required: false,
+  compliance_not_required: false, archived: false,
 };
 
 function parseInternalNotes(raw) {
@@ -941,10 +941,19 @@ function parseCSV(text) {
   return { headers, rows };
 }
 
-function CustomersView({ customers, reload, showToast }) {
+function CustomersView({ customers, reload, showToast, onOpenOrder }) {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY_CUSTOMER_FORM);
   const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivedList, setArchivedList] = useState([]);
+
+  useEffect(() => {
+    if (!showArchived) { setArchivedList([]); return; }
+    api.getCustomers({ include_archived: true })
+      .then(all => setArchivedList((all || []).filter(c => c.archived)))
+      .catch(() => {});
+  }, [showArchived]);
 
   const startEdit = (c) => {
     setEditing(c?.id || "new");
@@ -965,6 +974,7 @@ function CustomersView({ customers, reload, showToast }) {
       alternative_contact_name: c.alternative_contact_name || "",
       alternative_contact_phone: c.alternative_contact_phone || "",
       compliance_not_required: !!c.compliance_not_required,
+      archived: !!c.archived,
     });
   };
 
@@ -997,16 +1007,18 @@ function CustomersView({ customers, reload, showToast }) {
     catch (e) { showToast(e.message, "error"); }
   };
 
+  const displayCustomers = showArchived ? archivedList : (customers || []);
+
   const filtered = useMemo(() => {
-    if (!search) return customers || [];
+    if (!search) return displayCustomers;
     const s = search.toLowerCase();
-    return (customers || []).filter(c =>
+    return displayCustomers.filter(c =>
       (c.name || "").toLowerCase().includes(s) ||
       (c.address || "").toLowerCase().includes(s) ||
       (c.contact || "").toLowerCase().includes(s) ||
       (c.account_number || "").toLowerCase().includes(s)
     );
-  }, [customers, search]);
+  }, [displayCustomers, search]);
 
   const editingCust = editing && editing !== "new" ? (customers || []).find(c => c.id === editing) : null;
   const existingNotes = parseInternalNotes(editingCust?.internal_notes);
@@ -1056,12 +1068,37 @@ function CustomersView({ customers, reload, showToast }) {
               )}
             </h2>
           </div>
+          {editing !== "new" && custBalance && (
+            <div style={{ display: "flex", gap: 24, alignItems: "center", padding: "8px 16px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Outstanding (inc GST)</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: custBalance.balance > 0 ? C.red : C.muted }}>
+                  {fmtMoney(custBalance.balance)}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Credit Available (inc GST)</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: custBalance.credit_balance > 0 ? C.green : C.muted }}>
+                  {fmtMoney(custBalance.credit_balance)}
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: C.muted, textAlign: "right" }}>
+                {(custBalance.open_invoices?.length || 0)} open invoice{(custBalance.open_invoices?.length || 0) === 1 ? "" : "s"}<br />
+                {(custBalance.active_credits?.length || 0)} active credit{(custBalance.active_credits?.length || 0) === 1 ? "" : "s"}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
             <h2 style={{ fontSize: 20, fontWeight: 700 }}>Customers</h2>
-            <button onClick={() => startEdit(null)} style={btnStyle()}>+ Add Customer</button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setShowArchived(v => !v)} style={{ ...btnStyle(showArchived ? C.accent : undefined), fontSize: 13 }}>
+                {showArchived ? "Showing Archived" : "Show Archived"}
+              </button>
+              {!showArchived && <button onClick={() => startEdit(null)} style={btnStyle()}>+ Add Customer</button>}
+            </div>
           </div>
           <input placeholder="Search by account #, name, address, contact..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, marginBottom: 16, maxWidth: 400 }} />
         </>
@@ -1127,14 +1164,6 @@ function CustomersView({ customers, reload, showToast }) {
               <label style={labelStyle}>Duration</label>
               <input value={form.duration} onChange={e => setForm(p => ({ ...p, duration: e.target.value }))} style={inputStyle} />
             </div>
-            <div>
-              <label style={labelStyle}>Chain on Gas Bottle</label>
-              <select value={form.chain ? "yes" : "no"} onChange={e => setForm(p => ({ ...p, chain: e.target.value === "yes" }))} style={inputStyle}>
-                <option value="no">No</option>
-                <option value="yes">Yes</option>
-              </select>
-              <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>Does the customer have a chain securing their gas bottle?</div>
-            </div>
             {/* Last sale price (read-only display, only on existing customers) */}
             {editing !== "new" && lastSalePrice && (
               <div style={{ gridColumn: "1/-1", padding: "8px 12px", background: C.input, borderRadius: 6, fontSize: 12 }}>
@@ -1181,6 +1210,14 @@ function CustomersView({ customers, reload, showToast }) {
               <input type="checkbox" id="compliance_nr" checked={form.compliance_not_required} onChange={e => setForm(p => ({ ...p, compliance_not_required: e.target.checked }))} />
               <label htmlFor="compliance_nr" style={{ fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Compliance not required</label>
               <span style={{ fontSize: 11, color: C.muted }}>(suppresses the red highlight on the customer list)</span>
+            </div>
+            <div>
+              <label style={labelStyle}>Chain on Gas Bottle</label>
+              <select value={form.chain ? "yes" : "no"} onChange={e => setForm(p => ({ ...p, chain: e.target.value === "yes" }))} style={inputStyle}>
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>Does the customer have a chain securing their gas bottle?</div>
             </div>
             <div style={{ gridColumn: "1/-1" }}>
               <label style={labelStyle}>Customer Documents</label>
@@ -1302,31 +1339,19 @@ function CustomersView({ customers, reload, showToast }) {
               <span style={{ fontSize: 11, color: C.muted }}>(rental cylinder tracking & billing)</span>
             </div>
 
+            {editing !== "new" && (
+              <div style={{ gridColumn: "1/-1", display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
+                <input type="checkbox" id="archived_cust" checked={!!form.archived} onChange={e => setForm(p => ({ ...p, archived: e.target.checked }))} />
+                <label htmlFor="archived_cust" style={{ fontSize: 13, fontWeight: 600, cursor: "pointer", color: form.archived ? C.red : C.text }}>Archived</label>
+                <span style={{ fontSize: 11, color: C.muted }}>(hides this customer from the active customer list)</span>
+              </div>
+            )}
+
             {/* Orders & Balance panel — only on existing customers */}
             {editing !== "new" && (
               <>
                 <div style={sectionStyle}>Orders & Balance</div>
-                {custBalance && (
-                  <div style={{ gridColumn: "1/-1", display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 6 }}>
-                    <div>
-                      <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Outstanding (inc GST)</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: custBalance.balance > 0 ? C.red : C.muted }}>
-                        {fmtMoney(custBalance.balance)}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Credit Available (inc GST)</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: custBalance.credit_balance > 0 ? C.green : C.muted }}>
-                        {fmtMoney(custBalance.credit_balance)}
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 11, color: C.muted }}>
-                      {(custBalance.open_invoices?.length || 0)} open invoice{(custBalance.open_invoices?.length || 0) === 1 ? "" : "s"} ·{" "}
-                      {(custBalance.active_credits?.length || 0)} active credit{(custBalance.active_credits?.length || 0) === 1 ? "" : "s"}
-                    </div>
-                  </div>
-                )}
-                <div style={{ gridColumn: "1/-1" }}>
+<div style={{ gridColumn: "1/-1" }}>
                   <label style={labelStyle}>Customer Orders ({custOrders.length})</label>
                   {custOrders.length === 0 ? (
                     <div style={{ padding: 16, textAlign: "center", background: C.input, borderRadius: 6, color: C.muted, fontSize: 12 }}>No orders yet for this customer</div>
@@ -1342,7 +1367,12 @@ function CustomersView({ customers, reload, showToast }) {
                         </thead>
                         <tbody>
                           {custOrders.map(o => (
-                            <tr key={o.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                            <tr
+                              key={o.id}
+                              onClick={() => onOpenOrder && onOpenOrder(o.id)}
+                              style={{ borderBottom: `1px solid ${C.border}`, cursor: onOpenOrder ? "pointer" : "default" }}
+                              title={onOpenOrder ? "Click to open in Orders" : ""}
+                            >
                               <td style={{ padding: "6px 8px", color: C.accent, fontWeight: 600 }}>{o.order_number || "—"}</td>
                               <td style={{ padding: "6px 8px" }}>{o.order_date}</td>
                               <td style={{ padding: "6px 8px", color: C.muted }}>{o.po_number || "—"}</td>
@@ -1362,7 +1392,7 @@ function CustomersView({ customers, reload, showToast }) {
               </>
             )}
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
             <button onClick={save} style={btnStyle(C.green)}>Save</button>
             <button onClick={() => setEditing(null)} style={btnStyle(C.muted)}>Cancel</button>
           </div>
@@ -3108,7 +3138,7 @@ function ManualCompletionPanel({ orderId, orderNumber, lines, showToast, onCompl
 
 
 // ==================== ORDERS VIEW ====================
-function OrdersView({ customers, showToast, reloadCustomers }) {
+function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pendingOrderId, onPendingOrderHandled }) {
   const [orders, setOrders] = useState([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -3133,6 +3163,16 @@ function OrdersView({ customers, showToast, reloadCustomers }) {
     try { setOrders(await api.getOrders({ limit: 100 })); } catch(e) {}
   };
   useEffect(() => { loadOrders(); }, []);
+
+  // Open a specific order when navigated from another view (e.g. customer form)
+  useEffect(() => {
+    if (!pendingOrderId) return;
+    api.getOrder(pendingOrderId)
+      .then(o => { if (o) startEdit(o); })
+      .catch(() => {})
+      .finally(() => { if (onPendingOrderHandled) onPendingOrderHandled(); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOrderId]);
 
   // Load customer balance whenever the selected customer changes
   useEffect(() => {
@@ -3537,7 +3577,33 @@ function OrdersView({ customers, showToast, reloadCustomers }) {
             <div style={{ gridColumn: "1/-1" }}>
               <label style={labelStyle}>Order</label>
               <input value={form.order_detail} onChange={e => setForm(p => ({ ...p, order_detail: e.target.value }))} style={inputStyle} placeholder="e.g. 1x45, 1x8.5, 2 Cage acc" />
-              <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>Separate multiple items with commas</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>Separate multiple items with commas — or click a type below to add it</div>
+              {(cylinderTypes || []).length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                  {(cylinderTypes || []).map(ct => (
+                    <button
+                      key={ct.id}
+                      type="button"
+                      onClick={() => {
+                        const token = `1x${ct.label}`;
+                        setForm(p => ({
+                          ...p,
+                          order_detail: p.order_detail ? `${p.order_detail.trimEnd()}, ${token}` : token,
+                        }));
+                      }}
+                      style={{
+                        padding: "3px 10px", borderRadius: 12, fontSize: 11, cursor: "pointer", border: "none",
+                        background: ct.item_type === "cylinder" ? "#3b82f622" : "#f59e0b22",
+                        color: ct.item_type === "cylinder" ? C.blue : C.accent,
+                        fontWeight: 600,
+                      }}
+                      title={`Add 1x${ct.label} (${ct.item_type === "cylinder" ? "rental" : "sale"})`}
+                    >
+                      + {ct.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               {lookupError && (
                 <div style={{ marginTop: 6, padding: 8, background: "#ef444422", border: `1px solid ${C.red}`, borderRadius: 6, fontSize: 12, color: C.red }}>
                   ⚠ Price lookup failed: {lookupError}
@@ -5012,6 +5078,7 @@ export default function App() {
   const [authState, setAuthState] = useState("loading"); // loading | setup | login | app
   const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
+  const [pendingOrderId, setPendingOrderId] = useState(null);
   // 3.0.18: global search — results + selection for navigation
   const [globalSearchResults, setGlobalSearchResults] = useState(null);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
@@ -5103,8 +5170,8 @@ export default function App() {
   const renderView = () => {
     switch (view) {
       case "dashboard": return <DashboardView stats={stats.data} />;
-      case "orders": return <OrdersView customers={customers.data || []} showToast={showToast} reloadCustomers={customers.reload} />;
-      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} />;
+      case "orders": return <OrdersView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingOrderId={pendingOrderId} onPendingOrderHandled={() => setPendingOrderId(null)} />;
+      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId) => { setPendingOrderId(orderId); setView("orders"); }} />;
       case "cylindertypes": return <CylinderTypesView cylinderTypes={cylinderTypes.data} reload={cylinderTypes.reload} showToast={showToast} />;
       case "delivery": return <DeliveryView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} refreshAll={refreshAll} />;
       case "tracking": return <TrackingView customers={customers.data} cylinderTypes={cylinderTypes.data} />;

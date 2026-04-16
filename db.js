@@ -86,6 +86,7 @@ function initDB() {
   try { db.exec("ALTER TABLE customers ADD COLUMN alternative_contact_name TEXT DEFAULT ''"); } catch(e) { /* exists */ }
   try { db.exec("ALTER TABLE customers ADD COLUMN alternative_contact_phone TEXT DEFAULT ''"); } catch(e) { /* exists */ }
   try { db.exec("ALTER TABLE customers ADD COLUMN compliance_not_required INTEGER DEFAULT 0"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE customers ADD COLUMN archived INTEGER DEFAULT 0"); } catch(e) { /* exists */ }
 
   // --- ORDERS ---
   db.exec(`

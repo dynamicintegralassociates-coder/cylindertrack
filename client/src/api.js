@@ -31,7 +31,8 @@ const api = {
   changePassword: (userId, newPassword) => request("/auth/change-password", { method: "POST", body: JSON.stringify({ userId, newPassword }) }),
 
   // Customers
-  getCustomers: () => request("/customers"),
+  getCustomers: (params) => request(`/customers${params?.include_archived ? "?include_archived=1" : ""}`),
+  archiveCustomer: (id, archived) => request(`/customers/${id}/archive`, { method: "PATCH", body: JSON.stringify({ archived }) }),
   createCustomer: (data) => request("/customers", { method: "POST", body: JSON.stringify(data) }),
   updateCustomer: (id, data) => request(`/customers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteCustomer: (id) => request(`/customers/${id}`, { method: "DELETE" }),
