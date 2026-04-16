@@ -30,6 +30,20 @@ const labelStyle = { fontSize: 11, color: C.muted, marginBottom: 4, display: "bl
 // fmtMoney: customer-facing display. By default returns gross (net + 10% GST) so the user
 // sees what the customer actually pays. Used for: customer balances, invoice totals,
 // outstanding amounts, billing summaries, the order form total, dashboard money cards.
+// Date formatting — always yyyy-mm-dd or yyyy-mm-dd HH:MM
+const fmtDate = (v) => {
+  if (!v) return "";
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return String(v);
+  return d.toISOString().slice(0, 10);
+};
+const fmtDateTime = (v) => {
+  if (!v) return "";
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return String(v);
+  return d.toISOString().slice(0, 16).replace("T", " ");
+};
+
 const GST_RATE = 0.10;
 const fmtCurrency = (v) => `$${(v || 0).toFixed(2)}`;
 const grossOf = (net) => Math.round((net || 0) * (1 + GST_RATE) * 100) / 100;
@@ -527,7 +541,7 @@ function OptimoRouteView({ customers, cylinderTypes, showToast, refreshAll }) {
                     <td style={{ padding: "6px 8px" }}>{l.orders_fetched}</td>
                     <td style={{ padding: "6px 8px", color: C.green, fontWeight: 600 }}>{l.orders_imported}</td>
                     <td style={{ padding: "6px 8px", color: C.accent }}>{l.orders_skipped}</td>
-                    <td style={{ padding: "6px 8px", color: C.muted }}>{new Date(l.created).toLocaleString()}</td>
+                    <td style={{ padding: "6px 8px", color: C.muted }}>{fmtDateTime(l.created)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -681,7 +695,7 @@ function DashboardView({ stats }) {
         <Card>
           <div style={{ fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>{Icons.sync} OptimoRoute</div>
           <div style={{ fontSize: 13, color: C.muted }}>
-            Last sync: {new Date(stats.optimoroute.last_sync.created).toLocaleString()} · {stats.optimoroute.total_imported} total imported
+            Last sync: {fmtDateTime(stats.optimoroute.last_sync.created)} · {stats.optimoroute.total_imported} total imported
           </div>
         </Card>
       )}
@@ -1326,7 +1340,7 @@ function CustomersView({ customers, reload, showToast, onOpenOrder }) {
                   {existingNotes.map((n, i) => (
                     <div key={i} style={{ padding: "8px 12px", borderBottom: i < existingNotes.length - 1 ? `1px solid ${C.border}` : "none" }}>
                       <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, marginBottom: 4 }}>
-                        {n.date ? new Date(n.date).toLocaleString() : ""}
+                        {n.date ? fmtDateTime(n.date) : ""}
                       </div>
                       <div style={{ fontSize: 13, color: C.text, whiteSpace: "pre-wrap" }}>{n.text}</div>
                     </div>
@@ -4484,7 +4498,7 @@ function CreditsView({ customers, showToast, userRole }) {
                 <td style={{ padding: "8px", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={cn.reason}>{cn.reason || "—"}</td>
                 <td style={{ padding: "8px" }}>{statusBadge(cn.status)}</td>
                 <td style={{ padding: "8px", color: C.muted }}>{cn.created_by || "—"}</td>
-                <td style={{ padding: "8px", color: C.muted }}>{cn.created ? new Date(cn.created).toLocaleDateString() : "—"}</td>
+                <td style={{ padding: "8px", color: C.muted }}>{cn.created ? fmtDate(cn.created) : "—"}</td>
                 <td style={{ padding: "8px", whiteSpace: "nowrap" }}>
                   {cn.status === "pending" && isAdmin && (
                     <>
@@ -4767,7 +4781,7 @@ function AdministratorView({ showToast }) {
                       {rentalStatus.errors.length} error(s): {rentalStatus.errors.map(e => e.error).join("; ")}
                     </div>
                   )}
-                  {rentalStatus.ranAt && <div style={{ marginTop: 4, color: C.muted }}>Ran at {new Date(rentalStatus.ranAt).toLocaleString()}</div>}
+                  {rentalStatus.ranAt && <div style={{ marginTop: 4, color: C.muted }}>Ran at {fmtDateTime(rentalStatus.ranAt)}</div>}
                 </>
               )}
             </div>
