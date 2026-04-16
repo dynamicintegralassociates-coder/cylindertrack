@@ -2001,7 +2001,7 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
       const key = inv.customer_id;
       if (!m[key]) m[key] = {
         customer_id: key,
-        customer_name: cust?.name || inv.customer_name || "(unknown)",
+        customer_name: formatCustomerDisplay(cust) || inv.customer_name || "(unknown)",
         account_number: cust?.account_number || inv.account_number || "",
         account_customer: !!cust?.account_customer,
         category: cust?.customer_category || "",
@@ -2477,7 +2477,7 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
       const key = r.customer_id;
       if (!m[key]) m[key] = {
         customer_id: key,
-        customer_name: r.customer_name || cust?.name || "(unknown)",
+        customer_name: formatCustomerDisplay(cust) || r.customer_name || "(unknown)",
         account_number: cust?.account_number || "",
         account_customer: !!cust?.account_customer,
         category: cust?.customer_category || "",
@@ -2529,7 +2529,7 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
   const byCustomer = useMemo(() => {
     const m = {};
     for (const r of data) {
-      if (!m[r.customer_id]) m[r.customer_id] = { customer_id: r.customer_id, customer_name: r.customer_name, customer_address: r.customer_address, account_customer: r.account_customer, lines: [], subtotal: 0 };
+      if (!m[r.customer_id]) m[r.customer_id] = { customer_id: r.customer_id, customer_name: formatCustomerDisplay(customerMap[r.customer_id]) || r.customer_name, customer_address: r.customer_address, account_customer: r.account_customer, lines: [], subtotal: 0 };
       m[r.customer_id].lines.push(r);
       m[r.customer_id].subtotal += r.line_total;
     }
@@ -2564,7 +2564,7 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
         // Nothing was generated — show details so the user knows why
         const lookup = {};
         for (const c of (customers || [])) lookup[c.id] = c;
-        const detail = (r.skipped || []).slice(0, 5).map(s => `· ${lookup[s.customer_id]?.name || s.customer_id}: ${s.reason}`).join("\n");
+        const detail = (r.skipped || []).slice(0, 5).map(s => `· ${formatCustomerDisplay(lookup[s.customer_id]) || s.customer_id}: ${s.reason}`).join("\n");
         alert(`No invoices generated.\n\n${detail}${r.skipped.length > 5 ? `\n…and ${r.skipped.length - 5} more` : ""}`);
         return;
       }
@@ -2573,7 +2573,7 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
         const subtotal = i.total;
         const gst = Math.round(subtotal * GST_RATE * 100) / 100;
         const grandTotal = Math.round((subtotal + gst) * 100) / 100;
-        return { ...i, customer_name: cust?.customer_name || "Unknown", customer_address: cust?.customer_address || "", subtotal, gst, grandTotal };
+        return { ...i, customer_name: cust?.customer_name || formatCustomerDisplay(customerMap[i.customer_id]) || "Unknown", customer_address: cust?.customer_address || "", subtotal, gst, grandTotal };
       });
       setInvoices(inv);
     } catch(e) { showToast(e.message, "error"); }
