@@ -207,18 +207,20 @@ module.exports = function createRoutes(db) {
     // AND orders (order_number/po_number). Returns customers + orders + supporting txs.
     const customers = db.prepare(
       `SELECT * FROM customers
-       WHERE name LIKE ? OR address LIKE ? OR account_number LIKE ? OR contact LIKE ?
+       WHERE name LIKE ? OR address LIKE ? OR account_number LIKE ? OR contact LIKE ? OR phone LIKE ?
        ORDER BY name LIMIT 25`
-    ).all(term, term, term, term);
+    ).all(term, term, term, term, term);
     const orders = db.prepare(
       `SELECT o.id, o.order_number, o.po_number, o.customer_id, o.order_date, o.status,
-              c.name as customer_name, c.address as customer_address, c.account_number
+              o.order_detail, c.name as customer_name, c.address as customer_address,
+              c.account_number, c.contact as customer_contact, c.phone as customer_phone
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id
-       WHERE o.order_number LIKE ? OR o.po_number LIKE ?
+       WHERE o.order_number LIKE ? OR o.po_number LIKE ? OR o.order_detail LIKE ?
           OR c.name LIKE ? OR c.address LIKE ? OR c.account_number LIKE ?
+          OR c.contact LIKE ? OR c.phone LIKE ?
        ORDER BY o.order_date DESC LIMIT 25`
-    ).all(term, term, term, term, term);
+    ).all(term, term, term, term, term, term, term, term);
     const customerIds = customers.map(c => c.id);
     let transactions = [];
     if (customerIds.length > 0) {
@@ -792,7 +794,7 @@ module.exports = function createRoutes(db) {
   // ============================================================
   router.get("/orders", (req, res) => {
     const { status, customer_id, from, to, limit } = req.query;
-    let sql = "SELECT o.*, c.name as customer_name_lookup, c.address as customer_address_lookup FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE 1=1";
+    let sql = "SELECT o.*, c.name as customer_name_lookup, c.address as customer_address_lookup, c.contact as customer_contact_lookup, c.phone as customer_phone_lookup FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE 1=1";
     const params = [];
     if (status) { sql += " AND o.status = ?"; params.push(status); }
     if (customer_id) { sql += " AND o.customer_id = ?"; params.push(customer_id); }

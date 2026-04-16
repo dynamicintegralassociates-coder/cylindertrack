@@ -602,7 +602,10 @@ function MatchModal({ order, customers, cylinderTypes, onImport, onClose }) {
     const s = search.toLowerCase();
     return customers.filter(c =>
       (c.name || "").toLowerCase().includes(s) ||
-      (c.address || "").toLowerCase().includes(s)
+      (c.address || "").toLowerCase().includes(s) ||
+      (c.contact || "").toLowerCase().includes(s) ||
+      (c.phone || "").toLowerCase().includes(s) ||
+      (c.account_number || "").toLowerCase().includes(s)
     );
   }, [customers, search]);
 
@@ -1032,6 +1035,7 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
       (c.name || "").toLowerCase().includes(s) ||
       (c.address || "").toLowerCase().includes(s) ||
       (c.contact || "").toLowerCase().includes(s) ||
+      (c.phone || "").toLowerCase().includes(s) ||
       (c.account_number || "").toLowerCase().includes(s)
     );
   }, [displayCustomers, search]);
@@ -1798,7 +1802,8 @@ function TrackingView({ customers, cylinderTypes }) {
       (c.name || "").toLowerCase().includes(q) ||
       (c.address || "").toLowerCase().includes(q) ||
       (c.account_number || "").toLowerCase().includes(q) ||
-      (c.contact || "").toLowerCase().includes(q)
+      (c.contact || "").toLowerCase().includes(q) ||
+      (c.phone || "").toLowerCase().includes(q)
     )).slice(0, 50);
   }, [effectiveCustomers, filterQuery]);
 
@@ -1920,7 +1925,9 @@ function RentalSchedulerControls({ customers, showToast, onComplete }) {
     return accountCustomers.filter(c =>
       (c.name || "").toLowerCase().includes(q) ||
       (c.address || "").toLowerCase().includes(q) ||
-      (c.account_number || "").toLowerCase().includes(q)
+      (c.account_number || "").toLowerCase().includes(q) ||
+      (c.contact || "").toLowerCase().includes(q) ||
+      (c.phone || "").toLowerCase().includes(q)
     );
   }, [accountCustomers, search]);
 
@@ -3363,7 +3370,9 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
     return (customers || []).filter(c =>
       (c.name || "").toLowerCase().includes(s) ||
       (c.address || "").toLowerCase().includes(s) ||
-      (c.account_number || "").toLowerCase().includes(s)
+      (c.account_number || "").toLowerCase().includes(s) ||
+      (c.contact || "").toLowerCase().includes(s) ||
+      (c.phone || "").toLowerCase().includes(s)
     );
   }, [customers, custSearch]);
 
@@ -3591,7 +3600,15 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
     }
     if (!search) return list;
     const s = search.toLowerCase();
-    return list.filter(o => (o.customer_name || "").toLowerCase().includes(s) || (o.address || "").toLowerCase().includes(s) || (o.order_detail || "").toLowerCase().includes(s));
+    return list.filter(o =>
+      (o.customer_name || "").toLowerCase().includes(s) ||
+      (o.address || "").toLowerCase().includes(s) ||
+      (o.order_detail || "").toLowerCase().includes(s) ||
+      (o.po_number || "").toLowerCase().includes(s) ||
+      (o.order_number || "").toLowerCase().includes(s) ||
+      (o.customer_contact_lookup || "").toLowerCase().includes(s) ||
+      (o.customer_phone_lookup || "").toLowerCase().includes(s)
+    );
   }, [orders, search, creating, editing, form.customer_id, listCustomerFilter]);
 
   return (
@@ -4180,7 +4197,9 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
     return (customers || []).filter(c =>
       (c.name || "").toLowerCase().includes(s) ||
       (c.address || "").toLowerCase().includes(s) ||
-      (c.account_number || "").toLowerCase().includes(s)
+      (c.account_number || "").toLowerCase().includes(s) ||
+      (c.contact || "").toLowerCase().includes(s) ||
+      (c.phone || "").toLowerCase().includes(s)
     );
   }, [customers, custSearch]);
 
@@ -4190,7 +4209,9 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
     return (customers || []).filter(c =>
       (c.name || "").toLowerCase().includes(s) ||
       (c.address || "").toLowerCase().includes(s) ||
-      (c.account_number || "").toLowerCase().includes(s)
+      (c.account_number || "").toLowerCase().includes(s) ||
+      (c.contact || "").toLowerCase().includes(s) ||
+      (c.phone || "").toLowerCase().includes(s)
     );
   }, [customers, bulkSearch]);
 
