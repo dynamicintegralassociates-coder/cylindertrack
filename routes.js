@@ -682,10 +682,20 @@ module.exports = function createRoutes(db) {
         c.name as customer_name,
         c.address as customer_address,
         ct.label as cylinder_label,
-        ct.item_type as cylinder_item_type
+        ct.item_type as cylinder_item_type,
+        inv.id as invoice_id,
+        inv.invoice_number,
+        inv.due_date as invoice_due_date,
+        inv.status as invoice_status,
+        inv.total as invoice_total,
+        inv.amount_paid as invoice_amount_paid
       FROM transactions t
       LEFT JOIN customers c ON c.id = t.customer_id
       LEFT JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      LEFT JOIN invoices inv ON inv.customer_id = t.customer_id
+        AND inv.invoice_date = t.date
+        AND inv.status != 'void'
+        AND t.type = 'rental_invoice'
       WHERE 1=1`;
     const params = [];
     if (customer_id) { sql += " AND t.customer_id = ?"; params.push(customer_id); }
@@ -948,6 +958,40 @@ module.exports = function createRoutes(db) {
     res.json(order);
   });
 
+  // Per-order completion transactions (Del/Ret/Roth) grouped by order_line_id.
+  // Used by the order detail view to show what was recorded per line.
+  // Also includes order-level Optimo transactions (source='optimoroute') which have no
+  // order_line_id — these are tagged with order_line_id=null so the UI can show them
+  // as an order-level summary row.
+  router.get("/orders/:id/completions", (req, res) => {
+    const order = db.prepare("SELECT id, optimoroute_id, customer_id FROM orders WHERE id = ?").get(req.params.id);
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    // Per-line transactions (manual completion or order-sourced Optimo)
+    const perLine = db.prepare(`
+      SELECT t.id, t.type, t.qty, t.date, t.notes, t.source, t.foreign_owner,
+             t.order_line_id, ct.label as cylinder_label
+      FROM transactions t
+      LEFT JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      WHERE t.order_line_id IN (SELECT id FROM order_lines WHERE order_id = ?)
+        AND t.type IN ('delivery', 'return', 'return_other')
+      ORDER BY t.date, t.type
+    `).all(req.params.id);
+
+    // Order-level Optimo POD transactions (no order_line_id, keyed by optimoroute_id)
+    const optimoLevel = order.optimoroute_id ? db.prepare(`
+      SELECT t.id, t.type, t.qty, t.date, t.notes, t.source, t.foreign_owner,
+             NULL as order_line_id, ct.label as cylinder_label
+      FROM transactions t
+      LEFT JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      WHERE t.optimoroute_order = ? AND t.source = 'optimoroute'
+        AND t.type IN ('delivery', 'return', 'return_other')
+      ORDER BY t.date, t.type
+    `).all(order.optimoroute_id) : [];
+
+    res.json({ perLine, optimoLevel });
+  });
+
   // Lookup price + fixed-contract status for a single customer + cylinder type combo.
   // Used by the order edit form to know whether to allow editing the line price and
   // whether to prompt for write-back.
@@ -1109,6 +1153,22 @@ module.exports = function createRoutes(db) {
     return lines.every(l => terminal.has(l.status));
   }
 
+  // Find the rental cylinder type linked to a sale item type.
+  // Primary: explicit linked_sale_item_id. Fallback: first-number label match (e.g. "45kg" → "45 Rental").
+  function findLinkedRentalCylinder(saleItemId) {
+    const explicit = db.prepare(
+      "SELECT * FROM cylinder_types WHERE item_type = 'cylinder' AND linked_sale_item_id = ?"
+    ).get(saleItemId);
+    if (explicit) return explicit;
+    const saleType = db.prepare("SELECT label FROM cylinder_types WHERE id = ?").get(saleItemId);
+    if (!saleType) return null;
+    const m = (saleType.label || "").match(/(\d+\.?\d*)/);
+    if (!m) return null;
+    const size = m[1];
+    const rentals = db.prepare("SELECT * FROM cylinder_types WHERE item_type = 'cylinder'").all();
+    return rentals.find(ct => { const cm = (ct.label || "").match(/(\d+\.?\d*)/); return cm && cm[1] === size; }) || null;
+  }
+
   // Create delivery transactions for cylinder lines on the order.
   // Each cylinder line gets one transaction with prepaid_until set to (delivery_date + one cycle)
   // based on the customer's rental_frequency, marking it as prepaid so the rental scheduler skips
@@ -1126,18 +1186,12 @@ module.exports = function createRoutes(db) {
   //
   // Idempotent via order_line_id existence check. Safe to call from multiple completion paths.
   // Returns { delivered, rentalInvoiceId } for diagnostics. saleLine must have item_type='sale'.
+  // processLinkedRentalOnDelivery — handles a single sale line with known deliveredQty.
+  // Used by manualCompletion (per-line path) for large single-line orders.
+  // createDeliveryTransactionsForOrder uses the aggregate path instead (see below).
   function processLinkedRentalOnDelivery(order, customer, saleLine, deliveredQty) {
     if (!saleLine || saleLine.item_type !== "sale" || !(deliveredQty > 0)) return null;
-
-    // Look up the linked rental cylinder type. If none, this sale item has no rental linkage.
-    const ct = db.prepare("SELECT * FROM cylinder_types WHERE id = ?").get(saleLine.cylinder_type_id);
-    if (!ct || !ct.linked_sale_item_id) {
-      // saleLine.cylinder_type_id may BE the sale item id; the link goes the other direction.
-      // Check the reverse: find a rental cylinder whose linked_sale_item_id points to this sale type.
-    }
-    const linkedRental = db.prepare(
-      "SELECT * FROM cylinder_types WHERE item_type = 'cylinder' AND linked_sale_item_id = ?"
-    ).get(saleLine.cylinder_type_id);
+    const linkedRental = findLinkedRentalCylinder(saleLine.cylinder_type_id);
     if (!linkedRental) return null;
 
     // Idempotency: if we already wrote a delivery row for this order_line_id, bail.
@@ -1146,31 +1200,29 @@ module.exports = function createRoutes(db) {
     ).get(saleLine.id);
     if (exists) return null;
 
-    // Compute current rental on-hand for the customer + linked rental type.
-    // Note: any return transactions written earlier in this same completion (e.g. failsafe
-    // recorded a 'returned' action on a sibling line) will already be reflected in getOnHand,
-    // so the overflow calc naturally nets in-flight returns.
     const onHand = getOnHand(db, order.customer_id, linkedRental.id);
     const overflow = Math.max(0, deliveredQty - onHand);
     if (overflow <= 0) return null;
 
-    // Branch on customer category. Default = residential when null/empty/anything-not-commercial.
     const isCommercial = (customer?.customer_category || "").toLowerCase() === "commercial";
-    const prepaidUntil = isCommercial ? "" : "9999-12-31";
+    const freq = customer?.rental_frequency || "monthly";
+    const prepaidUntil = isCommercial ? "" : addFrequency(order.order_date, freq);
 
-    // Write the linked rental delivery transaction.
-    const txId = uid();
     db.prepare(
       `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, prepaid_until, order_line_id)
        VALUES (?, ?, ?, 'delivery', ?, ?, ?, 'order', ?, ?, ?)`
     ).run(
-      txId, order.customer_id, linkedRental.id, overflow, order.order_date,
-      `Order ${order.order_number} — auto linked rental for ${ct?.label || saleLine.cylinder_type_id} (overflow ${overflow} of ${deliveredQty} sold; ${isCommercial ? "commercial — billable" : "residential prepaid sentinel"})`,
+      uid(), order.customer_id, linkedRental.id, overflow, order.order_date,
+      `Order ${order.order_number} — auto linked rental overflow ${overflow} of ${deliveredQty} sold${prepaidUntil ? " (cycle 1 prepaid until " + prepaidUntil + ")" : ""}`,
       order.id, prepaidUntil, saleLine.id
     );
 
-    // Residential prepay: create a one-shot rental invoice for the overflow units.
-    // Commercial: nothing further — the end-of-month scheduler will bill it.
+    if (!isCommercial && customer?.rental_frequency && (!customer.next_rental_date || customer.next_rental_date === "")) {
+      db.prepare("UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?")
+        .run(prepaidUntil, order.order_date, order.customer_id);
+      if (customer) customer.next_rental_date = prepaidUntil;
+    }
+
     let rentalInvoiceId = null;
     if (!isCommercial) {
       const unitPrice = getPriceForDate(db, order.customer_id, linkedRental.id, order.order_date, linkedRental.default_price || 0);
@@ -1178,76 +1230,133 @@ module.exports = function createRoutes(db) {
       if (lineTotal > 0) {
         rentalInvoiceId = uid();
         const invoiceNumber = nextSequenceNumber(db, "invoice");
-        const overflowCust = db.prepare("SELECT payment_terms FROM customers WHERE id = ?").get(order.customer_id);
-        const overflowDueDate = calculateDueDate(order.order_date, overflowCust?.payment_terms);
+        const cust = db.prepare("SELECT payment_terms FROM customers WHERE id = ?").get(order.customer_id);
         db.prepare(
           `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
            VALUES (?, ?, ?, '', '', ?, 0, 'open', ?, ?)`
-        ).run(rentalInvoiceId, invoiceNumber, order.customer_id, lineTotal, order.order_date, overflowDueDate);
-
-        // Mirror billCustomerRental's pattern: write a rental_invoice transaction for the audit trail.
+        ).run(rentalInvoiceId, invoiceNumber, order.customer_id, lineTotal, order.order_date, calculateDueDate(order.order_date, cust?.payment_terms));
         db.prepare(
           `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, auto_generated)
            VALUES (?, ?, ?, 'rental_invoice', ?, ?, ?, 'order_linked_rental', 1)`
-        ).run(
-          uid(), order.customer_id, linkedRental.id, overflow, order.order_date,
-          `Auto rental invoice ${invoiceNumber} — residential prepay for ${overflow} × ${linkedRental.label} from order ${order.order_number}`
-        );
-
+        ).run(uid(), order.customer_id, linkedRental.id, overflow, order.order_date,
+          `Auto rental invoice ${invoiceNumber} — cycle 1 for ${overflow} × ${linkedRental.label} from order ${order.order_number}`);
         try { autoApplyCreditsToInvoice(db, order.customer_id, rentalInvoiceId); } catch (e) { /* tolerate */ }
       }
     }
-
     return { delivered: overflow, rentalInvoiceId, isCommercial };
   }
 
   function createDeliveryTransactionsForOrder(orderId) {
     const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(orderId);
     if (!order) return 0;
-    const customer = db.prepare("SELECT rental_frequency, customer_category, next_rental_date FROM customers WHERE id = ?").get(order.customer_id);
+    const customer = db.prepare(
+      "SELECT rental_frequency, customer_category, next_rental_date, payment_terms FROM customers WHERE id = ?"
+    ).get(order.customer_id);
     const lines = getOrderLinesWithType(orderId);
     const insTx = db.prepare(
       `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, prepaid_until, order_line_id)
        VALUES (?, ?, ?, 'delivery', ?, ?, ?, 'order', ?, ?, ?)`
     );
-    // 3.0.18: idempotency guard for explicit cylinder lines. Without this, calling this
-    // function twice on the same order (e.g. from order-creation auto-fast-path then from
-    // tryAutoTransitionToDelivered) would double-count on-hand.
-    const cylExists = db.prepare(
-      "SELECT 1 FROM transactions WHERE order_line_id = ? AND type = 'delivery' LIMIT 1"
-    );
+    const delExists = db.prepare("SELECT 1 FROM transactions WHERE order_line_id = ? AND type = 'delivery' LIMIT 1");
+    const retExists = db.prepare("SELECT 1 FROM transactions WHERE order_line_id = ? AND type = 'return' LIMIT 1");
     let count = 0;
-    for (const l of lines) {
-      // Sale lines: process linked rental (overflow against current on-hand → linked rental delivery).
-      if (l.item_type === "sale") {
-        const sdq = l.delivered_qty > 0 ? l.delivered_qty : (l.qty || 0);
-        const r = processLinkedRentalOnDelivery(order, customer, l, sdq);
-        if (r) count++;
-        continue;
-      }
-      // Explicit cylinder rental lines: original behaviour (first cycle prepaid).
-      if (l.item_type !== "cylinder") continue;
-      if (cylExists.get(l.id)) continue;
+
+    // ── Cylinder lines first (explicit rental lines, first-cycle prepaid) ─────────────
+    for (const l of lines.filter(ll => ll.item_type === "cylinder")) {
+      if (delExists.get(l.id)) continue;
       const deliveredQty = l.delivered_qty > 0 ? l.delivered_qty : (l.qty || 0);
       if (deliveredQty <= 0) continue;
       const freq = customer?.rental_frequency || "monthly";
       const prepaidUntil = addFrequency(order.order_date, freq);
-      const txId = uid();
-      insTx.run(
-        txId, order.customer_id, l.cylinder_type_id, deliveredQty, order.order_date,
+      insTx.run(uid(), order.customer_id, l.cylinder_type_id, deliveredQty, order.order_date,
         `Order ${order.order_number} — ${l.cylinder_label || l.cylinder_type_id} × ${deliveredQty} (first cycle prepaid until ${prepaidUntil})`,
-        orderId, prepaidUntil, l.id
-      );
-      // Seed next_rental_date to the end of the prepaid period so the scheduler
-      // knows when to start billing. Only set if not already populated.
-      if (customer?.rental_frequency && (!customer.next_rental_date || customer.next_rental_date === '')) {
+        orderId, prepaidUntil, l.id);
+      if (customer?.rental_frequency && (!customer.next_rental_date || customer.next_rental_date === "")) {
         db.prepare("UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?")
           .run(prepaidUntil, order.order_date, order.customer_id);
-        // Refresh so subsequent lines in the same order don't overwrite
         customer.next_rental_date = prepaidUntil;
       }
       count++;
     }
+
+    // ── Sale lines: aggregate ALL lines per linked rental type before computing overflow ─
+    // Processing each line individually fails when an order has e.g. 3 × qty=1 lines:
+    // each sees onHand=1 and delivers 1, so overflow=0 every time.  Aggregating first
+    // gives totalDelivered=3, overflow=2 (correct).
+    const TERMINAL_RETURN = new Set(["returned", "return_other", "cancelled"]);
+    const saleAgg = {}; // linkedRentalId → { linkedRental, delivered, returnLines }
+    for (const l of lines.filter(ll => ll.item_type === "sale")) {
+      const linkedRental = findLinkedRentalCylinder(l.cylinder_type_id);
+      if (!linkedRental) continue;
+      if (!saleAgg[linkedRental.id]) saleAgg[linkedRental.id] = { linkedRental, delivered: 0, returnLines: [] };
+      if (TERMINAL_RETURN.has(l.status)) {
+        saleAgg[linkedRental.id].returnLines.push(l);
+      } else {
+        if (delExists.get(l.id)) continue; // already handled per-line by processLinkedRentalOnDelivery
+        const sdq = l.delivered_qty > 0 ? l.delivered_qty : (l.qty || 0);
+        saleAgg[linkedRental.id].delivered += sdq;
+      }
+    }
+
+    // Write return transactions for returned sale lines first so getOnHand is accurate below.
+    for (const { linkedRental, returnLines } of Object.values(saleAgg)) {
+      for (const l of returnLines) {
+        if (retExists.get(l.id)) continue;
+        db.prepare(
+          `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, order_line_id)
+           VALUES (?, ?, ?, 'return', ?, ?, ?, 'order', ?)`
+        ).run(uid(), order.customer_id, linkedRental.id, l.qty || 1, order.order_date,
+          `Order ${order.order_number} — ${linkedRental.label} returned × ${l.qty || 1}`, orderId, l.id);
+      }
+    }
+
+    // Compute overflow per linked rental type and create delivery tx + rental invoice.
+    const isCommercial = (customer?.customer_category || "").toLowerCase() === "commercial";
+    const freq = customer?.rental_frequency || "monthly";
+    for (const { linkedRental, delivered } of Object.values(saleAgg)) {
+      if (delivered <= 0) continue;
+      // Idempotency: one aggregate delivery tx per order+rentalType combo.
+      const synthKey = `${orderId}|${linkedRental.id}`;
+      if (delExists.get(synthKey)) continue;
+
+      const onHand = getOnHand(db, order.customer_id, linkedRental.id);
+      const overflow = Math.max(0, delivered - onHand);
+      if (overflow <= 0) continue;
+
+      const prepaidUntil = isCommercial ? "" : addFrequency(order.order_date, freq);
+      insTx.run(uid(), order.customer_id, linkedRental.id, overflow, order.order_date,
+        `Order ${order.order_number} — auto linked rental overflow ${overflow} × ${linkedRental.label}${prepaidUntil ? " (cycle 1 prepaid until " + prepaidUntil + ")" : ""}`,
+        orderId, prepaidUntil, synthKey);
+
+      if (!isCommercial && customer?.rental_frequency && (!customer.next_rental_date || customer.next_rental_date === "")) {
+        db.prepare("UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?")
+          .run(prepaidUntil, order.order_date, order.customer_id);
+        customer.next_rental_date = prepaidUntil;
+      }
+
+      if (!isCommercial) {
+        const unitPrice = getPriceForDate(db, order.customer_id, linkedRental.id, order.order_date, linkedRental.default_price || 0);
+        const lineTotal = Math.round(unitPrice * overflow * 100) / 100;
+        if (lineTotal > 0) {
+          const rentalInvoiceId = uid();
+          const invoiceNumber = nextSequenceNumber(db, "invoice");
+          db.prepare(
+            `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
+             VALUES (?, ?, ?, '', '', ?, 0, 'open', ?, ?)`
+          ).run(rentalInvoiceId, invoiceNumber, order.customer_id, lineTotal, order.order_date,
+            calculateDueDate(order.order_date, customer?.payment_terms));
+          db.prepare(
+            `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, auto_generated)
+             VALUES (?, ?, ?, 'rental_invoice', ?, ?, ?, 'order_linked_rental', 1)`
+          ).run(uid(), order.customer_id, linkedRental.id, overflow, order.order_date,
+            `Auto rental invoice ${invoiceNumber} — cycle 1 for ${overflow} × ${linkedRental.label} from order ${order.order_number}`);
+          try { autoApplyCreditsToInvoice(db, order.customer_id, rentalInvoiceId); } catch (e) { /* tolerate */ }
+        }
+      }
+      count++;
+    }
+
+    recalculateCustomerBalance(db, order.customer_id);
     return count;
   }
 
@@ -1314,13 +1423,42 @@ module.exports = function createRoutes(db) {
   // If the order moves to 'delivered', also generates the invoice and creates delivery transactions.
   function tryAutoTransitionToDelivered(orderId) {
     if (!allLinesComplete(orderId)) return false;
-    const order = db.prepare("SELECT status FROM orders WHERE id = ?").get(orderId);
+    const order = db.prepare("SELECT status, customer_id, order_date FROM orders WHERE id = ?").get(orderId);
     if (!order) return false;
     // Don't re-transition if already past delivered
-    if (["delivered", "invoiced", "paid", "cancelled"].includes(order.status)) return false;
+    if (["delivered", "invoiced", "closed", "cancelled"].includes(order.status)) return false;
 
     setOrderStatus(orderId, "delivered");
     createDeliveryTransactionsForOrder(orderId);
+
+    // Commercial account customers: defer invoicing to the billing scheduler.
+    // The scheduler generates combined (sales + rental) invoices at the configured frequency.
+    // The order sits at 'delivered' until the next billing cycle collects it.
+    const cust = db.prepare(
+      "SELECT customer_category, account_customer, rental_frequency, invoice_frequency, next_rental_date, next_invoice_date FROM customers WHERE id = ?"
+    ).get(order.customer_id);
+    const isCommercialAccount = (cust?.customer_category || "").toLowerCase() === "commercial" && cust?.account_customer;
+
+    if (isCommercialAccount) {
+      // Seed next_rental_date / next_invoice_date the first time a delivery happens
+      const baseDate = order.order_date || new Date().toISOString().split("T")[0];
+      const updates = [];
+      const vals = [];
+      if (!cust.next_rental_date && cust.rental_frequency) {
+        updates.push("next_rental_date = ?");
+        vals.push(addFrequency(baseDate, cust.rental_frequency));
+      }
+      if (!cust.next_invoice_date && cust.invoice_frequency) {
+        updates.push("next_invoice_date = ?");
+        vals.push(addFrequency(baseDate, cust.invoice_frequency));
+      }
+      if (updates.length > 0) {
+        db.prepare(`UPDATE customers SET ${updates.join(", ")} WHERE id = ?`).run(...vals, cust.id);
+      }
+      // Leave order at 'delivered' — scheduler will invoice it when the cycle fires
+      return true;
+    }
+
     generateInvoiceForOrder(orderId);
     setOrderStatus(orderId, "invoiced");
 
@@ -1329,7 +1467,7 @@ module.exports = function createRoutes(db) {
     if (updatedOrder?.invoice_id) {
       const inv = db.prepare("SELECT amount_paid, total FROM invoices WHERE id = ?").get(updatedOrder.invoice_id);
       if (inv && inv.total > 0 && inv.amount_paid >= inv.total) {
-        setOrderStatus(orderId, "paid");
+        setOrderStatus(orderId, "closed");
       }
     }
     return true;
@@ -1586,7 +1724,7 @@ module.exports = function createRoutes(db) {
     // Round 3 rule: line edits are only allowed while the order is in 'open' or 'awaiting_dispatch'.
     // Once dispatched/delivered/invoiced, lines are frozen. Header field edits (notes, po, etc.)
     // are still allowed.
-    const lockedStates = ["dispatched", "delivered", "invoiced", "paid", "cancelled"];
+    const lockedStates = ["dispatched", "delivered", "invoiced", "closed", "cancelled"];
     const linesLocked = lockedStates.includes(existing.status);
 
     const { lines, total: newTotal, legacyHeaderLine } = normalizeOrderLines(req.body);
@@ -1949,7 +2087,7 @@ module.exports = function createRoutes(db) {
       const shouldPush = orderShouldPushToOptimo(order, lines);
 
       // Already dispatched or beyond → no-op
-      if (["dispatched", "delivered", "invoiced", "paid"].includes(order.status)) {
+      if (["dispatched", "delivered", "invoiced", "closed"].includes(order.status)) {
         return res.json({
           success: true,
           message: `Order already in status '${order.status}'`,
@@ -2086,38 +2224,306 @@ module.exports = function createRoutes(db) {
     if (!inv) return res.status(404).json({ error: "Invoice not found" });
     const payments = db.prepare("SELECT * FROM payments WHERE invoice_id = ? ORDER BY date DESC").all(req.params.id);
 
-    // Build line items: order_lines for order-linked invoices, transactions for rental invoices
-    let lines = [];
-    if (inv.order_id) {
-      lines = db.prepare(
-        `SELECT ol.id, ol.cylinder_type_id, ol.qty, ol.unit_price, ol.line_total,
-                ct.label as cylinder_label
-         FROM order_lines ol
-         LEFT JOIN cylinder_types ct ON ct.id = ol.cylinder_type_id
-         WHERE ol.order_id = ?
-         ORDER BY ol.sort_order, ol.id`
-      ).all(inv.order_id);
-    } else {
-      // Rental invoice — derive from rental_invoice transactions on the same date
-      const txns = db.prepare(`
-        SELECT t.cylinder_type as cylinder_type_id, t.qty, ct.label as cylinder_label, ct.default_price
-        FROM transactions t
-        JOIN cylinder_types ct ON ct.id = t.cylinder_type
-        WHERE t.customer_id = ? AND t.type = 'rental_invoice' AND t.date = ?
-      `).all(inv.customer_id, inv.invoice_date);
-      for (const t of txns) {
-        const unitPrice = getPriceForDate(db, inv.customer_id, t.cylinder_type_id, inv.invoice_date, t.default_price || 0);
-        lines.push({
-          cylinder_type_id: t.cylinder_type_id,
-          cylinder_label: t.cylinder_label,
-          qty: t.qty,
-          unit_price: unitPrice,
-          line_total: Math.round(unitPrice * t.qty * 100) / 100,
-        });
+    // All orders linked to this invoice (covers both single-order and combined account invoices)
+    const linkedOrders = db.prepare(
+      "SELECT id, order_number, order_date, order_detail, po_number, notes FROM orders WHERE invoice_id = ? ORDER BY order_date ASC"
+    ).all(req.params.id);
+
+    const olStmt = db.prepare(
+      `SELECT ol.id, ol.cylinder_type_id, ol.qty, ol.delivered_qty, ol.unit_price, ol.line_total, ol.status,
+              ct.label as cylinder_label
+       FROM order_lines ol
+       LEFT JOIN cylinder_types ct ON ct.id = ol.cylinder_type_id
+       WHERE ol.order_id = ? AND ol.status != 'cancelled'
+       ORDER BY ol.sort_order, ol.id`
+    );
+
+    // Build per-order sections (for detail view) and flat lines list
+    const orderSections = linkedOrders.map(o => {
+      const oLines = olStmt.all(o.id).map(l => ({
+        ...l,
+        qty: l.delivered_qty > 0 ? l.delivered_qty : l.qty,
+        line_total: l.line_total || Math.round((l.delivered_qty > 0 ? l.delivered_qty : l.qty) * (l.unit_price || 0) * 100) / 100,
+      }));
+      return { order: o, lines: oLines };
+    });
+
+    let lines = orderSections.flatMap(s => s.lines);
+
+    // Rental invoice transactions (shown alongside or when no orders are linked)
+    const rentalTxns = db.prepare(`
+      SELECT t.cylinder_type as cylinder_type_id, t.qty, ct.label as cylinder_label, ct.default_price
+      FROM transactions t
+      JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      WHERE t.customer_id = ? AND t.type = 'rental_invoice' AND t.date = ?
+        AND t.source IN ('auto_rental', 'order_linked_rental')
+    `).all(inv.customer_id, inv.invoice_date);
+    const rentalLines = rentalTxns.map(t => {
+      const unitPrice = getPriceForDate(db, inv.customer_id, t.cylinder_type_id, inv.invoice_date, t.default_price || 0);
+      return {
+        cylinder_type_id: t.cylinder_type_id,
+        cylinder_label: t.cylinder_label,
+        qty: t.qty,
+        unit_price: unitPrice,
+        line_total: Math.round(unitPrice * t.qty * 100) / 100,
+        is_rental: true,
+      };
+    });
+
+    // If no order lines found at all, fall back to showing rental lines as the main lines
+    if (lines.length === 0) lines = rentalLines;
+
+    res.json({ ...inv, payments, lines, orderSections, rentalLines });
+  });
+
+  // Print-friendly HTML invoice — open in new tab, use browser "Save as PDF"
+  router.get("/invoices/:id/print", (req, res) => {
+    const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
+    if (!inv) return res.status(404).send("<h1>Invoice not found</h1>");
+
+    const customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(inv.customer_id) || {};
+
+    // Business settings
+    const bizName    = getSetting(db, "business_name", "");
+    const bizABN     = getSetting(db, "business_abn", "");
+    const bizAddress = getSetting(db, "business_address", "");
+    const bizPhone   = getSetting(db, "business_phone", "");
+    const bizEmail   = getSetting(db, "business_email", "");
+    const bizBank    = getSetting(db, "business_bank", "");
+    const bizLogo    = getSetting(db, "business_logo", ""); // base64 data URL
+
+    // All orders linked to this invoice
+    const linkedOrders = db.prepare(
+      "SELECT id, order_number, order_date, order_detail, po_number, notes FROM orders WHERE invoice_id = ? ORDER BY order_date ASC"
+    ).all(inv.id);
+
+    const olStmt = db.prepare(
+      `SELECT ol.id, ol.cylinder_type_id, ol.qty, ol.delivered_qty, ol.unit_price, ol.line_total,
+              ct.label as cylinder_label
+       FROM order_lines ol
+       LEFT JOIN cylinder_types ct ON ct.id = ol.cylinder_type_id
+       WHERE ol.order_id = ? AND ol.status != 'cancelled'
+       ORDER BY ol.sort_order, ol.id`
+    );
+
+    const orderSections = linkedOrders.map(o => {
+      const lines = olStmt.all(o.id).map(l => ({
+        ...l,
+        qty: l.delivered_qty > 0 ? l.delivered_qty : l.qty,
+        line_total: l.line_total || Math.round((l.delivered_qty > 0 ? l.delivered_qty : l.qty) * (l.unit_price || 0) * 100) / 100,
+      }));
+      return { order: o, lines };
+    });
+
+    // Rental lines
+    const rentalTxns = db.prepare(`
+      SELECT t.cylinder_type as cylinder_type_id, t.qty, ct.label as cylinder_label, ct.default_price
+      FROM transactions t
+      JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      WHERE t.customer_id = ? AND t.type = 'rental_invoice' AND t.date = ?
+        AND t.source IN ('auto_rental', 'order_linked_rental')
+    `).all(inv.customer_id, inv.invoice_date);
+
+    const rentalLines = rentalTxns.map(t => {
+      const unitPrice = getPriceForDate(db, inv.customer_id, t.cylinder_type_id, inv.invoice_date, t.default_price || 0);
+      return {
+        cylinder_label: t.cylinder_label,
+        qty: t.qty,
+        unit_price: unitPrice,
+        line_total: Math.round(unitPrice * t.qty * 100) / 100,
+      };
+    });
+
+    // Payments
+    const payments = db.prepare("SELECT * FROM payments WHERE invoice_id = ? ORDER BY date ASC").all(inv.id);
+
+    const fmt = (v) => `$${((v || 0)).toFixed(2)}`;
+    const gst = (v) => Math.round((v || 0) * 0.10 * 100) / 100;
+    const gross = (v) => Math.round((v || 0) * 1.10 * 100) / 100;
+
+    const subtotal = inv.total || 0;
+    const gstAmt   = gst(subtotal);
+    const total    = gross(subtotal);
+    const paid     = gross(inv.amount_paid || 0);
+    const owed     = Math.round((total - paid) * 100) / 100;
+
+    const today = new Date().toISOString().split("T")[0];
+    const isOverdue = inv.due_date && inv.due_date < today && inv.status === "open";
+
+    const custName = (customer.name || customer.contact || inv.customer_name || "").trim();
+    const custAddr = [customer.address, customer.state].filter(Boolean).join(", ");
+
+    // Build order sections HTML
+    const orderHTML = orderSections.map(s => {
+      const rowsHTML = s.lines.map(l => `
+        <tr>
+          <td>${l.cylinder_label || "—"}</td>
+          <td class="num">${l.qty}</td>
+          <td class="num">${fmt(l.unit_price)}</td>
+          <td class="num">${fmt(l.line_total)}</td>
+        </tr>`).join("");
+      return `
+        <div class="section-label">Order ${s.order.order_number || ""}${s.order.order_date ? " &mdash; " + s.order.order_date : ""}${s.order.po_number ? " &mdash; PO: " + s.order.po_number : ""}</div>
+        <table>
+          <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Total</th></tr></thead>
+          <tbody>${rowsHTML || "<tr><td colspan='4' style='color:#999'>No line items</td></tr>"}</tbody>
+        </table>`;
+    }).join("");
+
+    // Rental lines HTML
+    const rentalHTML = rentalLines.length > 0 ? `
+      <div class="section-label">Rental Charges</div>
+      <table>
+        <thead><tr><th>Cylinder</th><th class="num">Qty on Hand</th><th class="num">Rate</th><th class="num">Charge</th></tr></thead>
+        <tbody>
+          ${rentalLines.map(l => `
+            <tr>
+              <td>${l.cylinder_label || "—"}</td>
+              <td class="num">${l.qty}</td>
+              <td class="num">${fmt(l.unit_price)}</td>
+              <td class="num">${fmt(l.line_total)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>` : "";
+
+    // Fallback: plain lines if no order sections or rental lines
+    let fallbackHTML = "";
+    if (orderSections.length === 0 && rentalLines.length === 0) {
+      // try order_id directly
+      if (inv.order_id) {
+        const fl = db.prepare(`SELECT ol.*, ct.label as cylinder_label FROM order_lines ol LEFT JOIN cylinder_types ct ON ct.id = ol.cylinder_type_id WHERE ol.order_id = ?`).all(inv.order_id);
+        if (fl.length > 0) {
+          fallbackHTML = `<table>
+            <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Total</th></tr></thead>
+            <tbody>${fl.map(l => `<tr><td>${l.cylinder_label||"—"}</td><td class="num">${l.qty}</td><td class="num">${fmt(l.unit_price)}</td><td class="num">${fmt(l.line_total)}</td></tr>`).join("")}</tbody>
+          </table>`;
+        }
       }
     }
 
-    res.json({ ...inv, payments, lines });
+    // Payments HTML
+    const paymentsHTML = payments.length > 0 ? `
+      <div class="section-label">Payments Received</div>
+      <table>
+        <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th class="num">Amount (inc GST)</th></tr></thead>
+        <tbody>
+          ${payments.map(p => `<tr><td>${p.date||""}</td><td>${p.method||"—"}</td><td>${p.reference||"—"}</td><td class="num">${fmt(gross(p.amount))}</td></tr>`).join("")}
+        </tbody>
+      </table>` : "";
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Invoice ${inv.invoice_number}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; font-size: 13px; color: #222; background: #fff; padding: 40px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; }
+  .biz { max-width: 55%; }
+  .biz-logo { max-height: 80px; max-width: 220px; object-fit: contain; display: block; margin-bottom: 8px; }
+  .biz-name { font-size: 22px; font-weight: 800; color: #111; margin-bottom: 4px; }
+  .biz-detail { font-size: 12px; color: #555; line-height: 1.7; }
+  .inv-box { text-align: right; }
+  .inv-number { font-size: 22px; font-weight: 800; color: #d97706; }
+  .inv-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: #888; font-weight: 700; }
+  .inv-meta { font-size: 12px; color: #333; line-height: 1.9; }
+  .overdue { color: #dc2626; font-weight: 700; }
+  .overdue-badge { display: inline-block; background: #dc2626; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+  .divider { border: none; border-top: 2px solid #e5e7eb; margin: 24px 0; }
+  .bill-to { margin-bottom: 24px; }
+  .bill-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: #888; font-weight: 700; margin-bottom: 6px; }
+  .bill-name { font-size: 15px; font-weight: 700; }
+  .bill-detail { font-size: 12px; color: #555; line-height: 1.7; }
+  .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: #888; font-weight: 700; margin: 18px 0 6px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  th { background: #f3f4f6; text-align: left; padding: 7px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #555; border-bottom: 1px solid #e5e7eb; }
+  td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; font-size: 12px; }
+  .num { text-align: right; }
+  .totals { margin-top: 20px; display: flex; justify-content: flex-end; }
+  .totals-table { width: 260px; }
+  .totals-table td { border: none; padding: 4px 10px; font-size: 13px; }
+  .totals-table .label { color: #555; }
+  .totals-table .val { text-align: right; font-weight: 600; }
+  .total-row td { font-size: 16px; font-weight: 800; color: #111; border-top: 2px solid #111; padding-top: 8px; }
+  .paid-row td { color: #16a34a; }
+  .owed-row td { color: ${owed > 0 ? "#dc2626" : "#16a34a"}; font-size: 15px; font-weight: 800; }
+  .bank-box { margin-top: 28px; padding: 14px 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 12px; color: #444; }
+  .bank-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #888; margin-bottom: 6px; }
+  .status-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    background: ${ inv.status==="paid" ? "#dcfce7" : inv.status==="void" ? "#f3f4f6" : "#fef3c7" };
+    color: ${ inv.status==="paid" ? "#15803d" : inv.status==="void" ? "#6b7280" : "#b45309" }; }
+  @media print {
+    body { padding: 0; }
+    @page { margin: 20mm 18mm; size: A4; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="biz">
+    ${bizLogo ? `<img class="biz-logo" src="${bizLogo}" alt="logo">` : ""}
+    ${bizName ? `<div class="biz-name">${bizName}</div>` : `<div class="biz-name">Tax Invoice</div>`}
+    <div class="biz-detail">
+      ${bizAddress ? bizAddress + "<br>" : ""}
+      ${bizPhone ? "Ph: " + bizPhone + (bizEmail ? " &nbsp;|&nbsp; " : "<br>") : ""}
+      ${bizEmail ? "Email: " + bizEmail + "<br>" : ""}
+      ${bizABN ? "ABN: " + bizABN : ""}
+    </div>
+  </div>
+  <div class="inv-box">
+    <div class="inv-label">Tax Invoice</div>
+    <div class="inv-number">${inv.invoice_number}</div>
+    <div class="inv-meta">
+      <span class="inv-label">Invoice date</span><br>${inv.invoice_date || "—"}<br>
+      <span class="inv-label">Due date</span><br>
+      <span class="${isOverdue ? "overdue" : ""}">${inv.due_date || "—"}${isOverdue ? '<span class="overdue-badge">OVERDUE</span>' : ""}</span><br>
+      <span class="inv-label">Status</span><br><span class="status-badge">${inv.status || "open"}</span>
+    </div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="bill-to">
+  <div class="bill-label">Bill To</div>
+  <div class="bill-name">${custName || "—"}</div>
+  <div class="bill-detail">
+    ${customer.abn ? "ABN: " + customer.abn + "<br>" : ""}
+    ${custAddr || ""}
+    ${customer.phone ? "<br>Ph: " + customer.phone : ""}
+    ${customer.accounts_email || customer.email ? "<br>" + (customer.accounts_email || customer.email) : ""}
+    ${inv.po_number ? "<br>PO: " + inv.po_number : ""}
+  </div>
+</div>
+
+<hr class="divider">
+
+${orderHTML}
+${rentalHTML}
+${fallbackHTML}
+
+<div class="totals">
+  <table class="totals-table">
+    <tr><td class="label">Subtotal (exc GST)</td><td class="val">${fmt(subtotal)}</td></tr>
+    <tr><td class="label">GST (10%)</td><td class="val">${fmt(gstAmt)}</td></tr>
+    <tr class="total-row"><td class="label">Total</td><td class="val">${fmt(total)}</td></tr>
+    <tr class="paid-row"><td class="label">Paid</td><td class="val">${fmt(paid)}</td></tr>
+    <tr class="owed-row"><td class="label">Balance Due</td><td class="val">${fmt(owed)}</td></tr>
+  </table>
+</div>
+
+${paymentsHTML}
+
+${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>${bizBank.replace(/\n/g, "<br>")}</div>` : ""}
+
+<script>window.onload = function() { window.print(); };</script>
+</body>
+</html>`;
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
   });
 
   // Record a payment against an invoice
@@ -2158,9 +2564,9 @@ module.exports = function createRoutes(db) {
         if (order) {
           db.prepare("UPDATE orders SET paid = 1 WHERE id = ?").run(order.id);
 
-          // If the order has been delivered/invoiced, transition to 'paid'.
+          // If the order has been delivered/invoiced, transition to 'closed'.
           if (["delivered", "invoiced"].includes(order.status)) {
-            setOrderStatus(order.id, "paid");
+            setOrderStatus(order.id, "closed");
           }
           // If the order is still 'open' (residential awaiting payment), bump to 'awaiting_dispatch'
           // so the auto-push triggers in phase 2.
@@ -2238,7 +2644,7 @@ module.exports = function createRoutes(db) {
   router.post("/orders/:id/lines/:lineId/deliver", (req, res) => {
     const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.id);
     if (!order) return res.status(404).json({ error: "Order not found" });
-    if (["delivered", "invoiced", "paid", "cancelled"].includes(order.status)) {
+    if (["delivered", "invoiced", "closed", "cancelled"].includes(order.status)) {
       return res.status(400).json({ error: `Cannot mark line on order in status '${order.status}'` });
     }
     const { delivered_qty, mark_complete } = req.body || {};
@@ -2282,7 +2688,7 @@ module.exports = function createRoutes(db) {
       if (!order) return res.status(404).json({ error: "Order not found" });
       // Same lock as the existing /deliver endpoint: only allowed while order is in
       // a pre-completion state. If it's already delivered/invoiced/paid, refuse.
-      if (["delivered", "invoiced", "paid", "cancelled"].includes(order.status)) {
+      if (["delivered", "invoiced", "closed", "cancelled"].includes(order.status)) {
         return res.status(400).json({ error: `Cannot manually complete a line on an order in status '${order.status}'` });
       }
 
@@ -2401,7 +2807,7 @@ module.exports = function createRoutes(db) {
     try {
       const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.id);
       if (!order) return res.status(404).json({ error: "Order not found" });
-      if (["delivered", "invoiced", "paid", "cancelled"].includes(order.status)) {
+      if (["delivered", "invoiced", "closed", "cancelled"].includes(order.status)) {
         return res.status(400).json({ error: `Cannot manually complete lines on an order in status '${order.status}'` });
       }
 
@@ -2473,38 +2879,51 @@ module.exports = function createRoutes(db) {
           let hadReturn = false;
           let hadReturnOther = false;
 
-          // Write one transaction per completion entry
+          // Write one transaction per completion entry.
+          // IMPORTANT: Only cylinder-type lines get raw delivery/return transactions here.
+          // Sale-type lines must NOT get transactions at this stage — their linked rental
+          // overflow is handled after the loop by processLinkedRentalOnDelivery (per-line)
+          // and by createDeliveryTransactionsForOrder (aggregate, via tryAutoTransitionToDelivered).
+          // Pre-inserting delivery/return txs for sale lines would poison the idempotency
+          // checks (delExists / retExists keyed by order_line_id) and cause no rental invoice
+          // to be generated.
           for (const r of lineCompletions) {
             const { action, qty, foreign_owner } = r;
             if (action === "delivered") {
               hadDelivery = true;
               totalDelivered += qty;
-              db.prepare(
-                `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id)
-                 VALUES (?, ?, ?, 'delivery', ?, ?, ?, 'manual', '', ?)`
-              ).run(
-                uid(), order.customer_id, line.cylinder_type_id, qty, order.order_date,
-                `${baseNote} | Del:${qty}`, line.id
-              );
+              if (line.item_type === "cylinder") {
+                db.prepare(
+                  `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id)
+                   VALUES (?, ?, ?, 'delivery', ?, ?, ?, 'manual', '', ?)`
+                ).run(
+                  uid(), order.customer_id, line.cylinder_type_id, qty, order.order_date,
+                  `${baseNote} | Del:${qty}`, line.id
+                );
+              }
             } else if (action === "returned") {
               hadReturn = true;
-              db.prepare(
-                `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id)
-                 VALUES (?, ?, ?, 'return', ?, ?, ?, 'manual', '', ?)`
-              ).run(
-                uid(), order.customer_id, line.cylinder_type_id, qty, order.order_date,
-                `${baseNote} | Ret:${qty}`, line.id
-              );
+              if (line.item_type === "cylinder") {
+                db.prepare(
+                  `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id)
+                   VALUES (?, ?, ?, 'return', ?, ?, ?, 'manual', '', ?)`
+                ).run(
+                  uid(), order.customer_id, line.cylinder_type_id, qty, order.order_date,
+                  `${baseNote} | Ret:${qty}`, line.id
+                );
+              }
             } else if (action === "returned_other") {
               hadReturnOther = true;
-              db.prepare(
-                `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id, foreign_owner)
-                 VALUES (?, ?, ?, 'return_other', ?, ?, ?, 'manual', '', ?, ?)`
-              ).run(
-                uid(), order.customer_id, line.cylinder_type_id, qty, order.order_date,
-                `${baseNote} | Roth:${qty} from ${foreign_owner}`,
-                line.id, foreign_owner
-              );
+              if (line.item_type === "cylinder") {
+                db.prepare(
+                  `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id, foreign_owner)
+                   VALUES (?, ?, ?, 'return_other', ?, ?, ?, 'manual', '', ?, ?)`
+                ).run(
+                  uid(), order.customer_id, line.cylinder_type_id, qty, order.order_date,
+                  `${baseNote} | Roth:${qty} from ${foreign_owner}`,
+                  line.id, foreign_owner
+                );
+              }
             }
           }
 
@@ -3629,6 +4048,15 @@ module.exports = function createRoutes(db) {
     res.json({ success: true, ...result });
   });
 
+  // Force-generate sales invoices only for commercial account customers.
+  // Collects all pending delivered orders into one invoice per customer.
+  // Does not affect rental billing or next_rental_date.
+  router.post("/rentals/generate-sales-now", (req, res) => {
+    const customerIds = Array.isArray(req.body?.customer_ids) ? req.body.customer_ids : null;
+    const result = runSalesForce(db, customerIds);
+    res.json({ success: true, ...result });
+  });
+
   // ============================================================
   // PRICING
   // ============================================================
@@ -3855,7 +4283,7 @@ module.exports = function createRoutes(db) {
     // Order stats — round 3 status model
     const ordersOpen = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status IN ('open', 'awaiting_dispatch')").get().c;
     const ordersDispatched = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status = 'dispatched'").get().c;
-    const ordersDelivered = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status IN ('delivered', 'invoiced', 'paid')").get().c;
+    const ordersDelivered = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status IN ('delivered', 'invoiced', 'closed')").get().c;
     const ordersTotal = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status != 'cancelled'").get().c;
     const recentOrders = db.prepare("SELECT o.*, c.name as customer_name_lookup FROM orders o LEFT JOIN customers c ON c.id = o.customer_id ORDER BY o.order_date DESC, o.created DESC LIMIT 10").all();
 
@@ -4166,7 +4594,7 @@ module.exports = function createRoutes(db) {
       // create delivery transactions, generate invoice, transition to invoiced/paid.
       let ordersCompleted = 0;
       const ctOrders = db.prepare(
-        "SELECT * FROM orders WHERE optimoroute_id != '' AND status NOT IN ('delivered', 'invoiced', 'paid', 'cancelled') AND collection = 0"
+        "SELECT * FROM orders WHERE optimoroute_id != '' AND status NOT IN ('delivered', 'invoiced', 'closed', 'cancelled') AND collection = 0"
       ).all();
       for (const ctOrder of ctOrders) {
         const completion = completionMap[ctOrder.optimoroute_id];
@@ -4245,7 +4673,7 @@ module.exports = function createRoutes(db) {
             if (ctOrder.invoice_id) {
               const inv = db.prepare("SELECT amount_paid, total FROM invoices WHERE id = ?").get(ctOrder.invoice_id);
               if (inv && inv.total > 0 && inv.amount_paid >= inv.total) {
-                db.prepare("UPDATE orders SET status = 'paid' WHERE id = ?").run(ctOrder.id);
+                db.prepare("UPDATE orders SET status = 'closed' WHERE id = ?").run(ctOrder.id);
               }
             }
 
@@ -4785,14 +5213,18 @@ function billCustomerRental(db, cust, mode) {
 // Scheduler entry: bill all account customers whose cycle is due today.
 // Residential = per rental_frequency, commercial = end-of-month.
 function runDueRentals(db) {
-  // Bill any customer who has a rental_frequency and next_rental_date set —
-  // the account_customer flag is not required. Commercial customers bill end-of-month;
-  // residential customers bill when next_rental_date <= today.
+  // Commercial account customers (account_customer=1 + customer_category='commercial') are billed
+  // by billCommercialAccount() using next_rental_date + next_invoice_date.
+  // All other customers are billed by billCustomerRental() using next_rental_date.
   const eligible = db.prepare(`
-    SELECT id, rental_frequency, next_rental_date, customer_category, payment_terms
+    SELECT id, rental_frequency, next_rental_date, customer_category, payment_terms,
+           account_customer, invoice_frequency, next_invoice_date
     FROM customers
-    WHERE rental_frequency IS NOT NULL AND rental_frequency != ''
-      AND next_rental_date IS NOT NULL AND next_rental_date != ''
+    WHERE (rental_frequency IS NOT NULL AND rental_frequency != ''
+           AND next_rental_date IS NOT NULL AND next_rental_date != '')
+       OR (LOWER(customer_category) = 'commercial' AND account_customer = 1
+           AND invoice_frequency IS NOT NULL AND invoice_frequency != ''
+           AND next_invoice_date IS NOT NULL AND next_invoice_date != '')
   `).all();
 
   let customersBilled = 0;
@@ -4802,7 +5234,12 @@ function runDueRentals(db) {
 
   for (const cust of eligible) {
     try {
-      const r = db.transaction(() => billCustomerRental(db, cust, "due"))();
+      const isCommercialAccount = (cust.customer_category || "").toLowerCase() === "commercial" && cust.account_customer;
+      const r = db.transaction(() =>
+        isCommercialAccount
+          ? billCommercialAccount(db, cust, "due")
+          : billCustomerRental(db, cust, "due")
+      )();
       if (r.invoicesCreated > 0) {
         customersBilled++;
         invoicesCreated += r.invoicesCreated;
@@ -4816,12 +5253,199 @@ function runDueRentals(db) {
   return { customersBilled, invoicesCreated, transactionsCreated, errors, ranAt: new Date().toISOString() };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// COMMERCIAL ACCOUNT BILLING
+// For customers where customer_category='commercial' AND account_customer=1:
+//
+//   • Orders sit at 'delivered' after dispatch — no per-order invoice is created.
+//   • The scheduler (runDueRentals) calls billCommercialAccount() when dates are due.
+//
+//   Case A  rental_frequency == invoice_frequency:
+//     → One combined invoice: all pending delivered orders (sales) + on-hand rental.
+//
+//   Case B  frequencies differ:
+//     → Rental invoice at rental_frequency, sized to on-hand as at that date.
+//     → Sales invoice at invoice_frequency, covering all pending delivered orders.
+//
+// mode: "due"          — only fires when next_rental_date / next_invoice_date are reached
+//       "force"        — bills both sales and rental immediately (ignores dates)
+//       "force-sales"  — bills sales invoices only (pending delivered orders)
+//       "force-rental" — bills rental invoice only (on-hand as at today)
+// ─────────────────────────────────────────────────────────────────────────────
+function billCommercialAccount(db, cust, mode) {
+  const today = new Date().toISOString().split("T")[0];
+
+  const rentalDue = (mode === "force" || mode === "force-rental") ||
+    (cust.rental_frequency && cust.next_rental_date && cust.next_rental_date <= today);
+  const invoiceDue = (mode === "force" || mode === "force-sales") ||
+    (cust.invoice_frequency && cust.next_invoice_date && cust.next_invoice_date <= today);
+
+  if (!rentalDue && !invoiceDue) return { invoicesCreated: 0, transactionsCreated: 0 };
+
+  const freqMatch = cust.rental_frequency && cust.invoice_frequency &&
+    cust.rental_frequency.toLowerCase() === cust.invoice_frequency.toLowerCase();
+
+  const txStmt = db.prepare(
+    "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, auto_generated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)"
+  );
+  const invStmt = db.prepare(
+    `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
+     VALUES (?, ?, ?, '', '', ?, 0, 'open', ?, ?)`
+  );
+
+  // On-hand rental charges as at billDate (cylinders still within prepaid window excluded)
+  function computeRentalCharges(billDate) {
+    const rows = db.prepare(`
+      SELECT t.cylinder_type,
+        SUM(CASE WHEN t.type='delivery' AND (t.prepaid_until = '' OR t.prepaid_until IS NULL OR t.prepaid_until <= ?) THEN t.qty ELSE 0 END) -
+        SUM(CASE WHEN t.type='return' THEN t.qty ELSE 0 END) as on_hand
+      FROM transactions t
+      JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      WHERE ct.item_type = 'cylinder' AND t.customer_id = ? AND t.date <= ?
+      GROUP BY t.cylinder_type
+      HAVING on_hand > 0
+    `).all(billDate, cust.id, billDate);
+    let total = 0;
+    const lines = [];
+    for (const r of rows) {
+      const ct = db.prepare("SELECT * FROM cylinder_types WHERE id = ?").get(r.cylinder_type);
+      if (!ct) continue;
+      const unitPrice = getPriceForDate(db, cust.id, r.cylinder_type, billDate, ct.default_price || 0);
+      const lineTotal = Math.round(unitPrice * r.on_hand * 100) / 100;
+      total += lineTotal;
+      lines.push({ cylinderTypeId: r.cylinder_type, label: ct.label, qty: r.on_hand, lineTotal });
+    }
+    return { total: Math.round(total * 100) / 100, lines };
+  }
+
+  // Delivered orders not yet properly billed.
+  // Includes orders with no invoice AND orders whose linked invoice is still 'pending'
+  // (a stale draft created before account billing was configured on the customer).
+  function getPendingOrders() {
+    return db.prepare(`
+      SELECT o.* FROM orders o
+      LEFT JOIN invoices i ON i.id = o.invoice_id
+      WHERE o.customer_id = ? AND o.status = 'delivered'
+        AND (o.invoice_id IS NULL OR o.invoice_id = '' OR i.status = 'pending')
+      ORDER BY o.order_date ASC
+    `).all(cust.id);
+  }
+
+  // Sum delivered line totals across a list of orders
+  function computeOrdersTotal(orders) {
+    let total = 0;
+    for (const o of orders) {
+      const lines = db.prepare(
+        "SELECT delivered_qty, unit_price, status FROM order_lines WHERE order_id = ?"
+      ).all(o.id);
+      for (const l of lines) {
+        if (l.status === "cancelled") continue;
+        total += (l.delivered_qty > 0 ? l.delivered_qty : 0) * (l.unit_price || 0);
+      }
+    }
+    return Math.round(total * 100) / 100;
+  }
+
+  // Create one invoice, link pending orders to it, write rental tx audit rows, apply credits
+  function createInvoice(billDate, invoiceTotal, pendingOrders, rentalLines, freqLabel) {
+    const invoiceId = nodeCrypto.randomBytes(6).toString("hex");
+    const invoiceNumber = nextSequenceNumber(db, "invoice");
+    invStmt.run(invoiceId, invoiceNumber, cust.id, invoiceTotal, billDate, calculateDueDate(billDate, cust.payment_terms));
+    for (const o of pendingOrders) {
+      // Void any stale 'pending' invoice created before account billing was configured
+      if (o.invoice_id) {
+        db.prepare("UPDATE invoices SET status = 'void', updated = datetime('now') WHERE id = ? AND status = 'pending'").run(o.invoice_id);
+      }
+      db.prepare(
+        "UPDATE orders SET invoice_id = ?, status = 'invoiced', updated = datetime('now') WHERE id = ?"
+      ).run(invoiceId, o.id);
+    }
+    let txCount = 0;
+    for (const line of rentalLines) {
+      txStmt.run(
+        nodeCrypto.randomBytes(6).toString("hex"), cust.id, line.cylinderTypeId,
+        "rental_invoice", line.qty, billDate,
+        `Auto rental invoice ${invoiceNumber} — ${freqLabel} as at ${billDate}`,
+        "auto_rental"
+      );
+      txCount++;
+    }
+    try { autoApplyCreditsToInvoice(db, cust.id, invoiceId); } catch(e) { /* tolerate */ }
+    return { invoiceId, txCount };
+  }
+
+  let invoicesCreated = 0;
+  let transactionsCreated = 0;
+
+  if (freqMatch && rentalDue && invoiceDue) {
+    // ── Case A: frequencies match → one combined invoice ─────────────────────
+    const billDate = cust.next_rental_date || today;
+    const rentalCharges = computeRentalCharges(billDate);
+    const pendingOrders = getPendingOrders();
+    const salesTotal = computeOrdersTotal(pendingOrders);
+    const combinedTotal = Math.round((salesTotal + rentalCharges.total) * 100) / 100;
+
+    if (combinedTotal > 0 || pendingOrders.length > 0) {
+      const { txCount } = createInvoice(
+        billDate, combinedTotal, pendingOrders, rentalCharges.lines,
+        `${cust.rental_frequency} combined`
+      );
+      invoicesCreated++;
+      transactionsCreated += txCount;
+    }
+    const next = addFrequency(billDate, cust.rental_frequency);
+    db.prepare(
+      "UPDATE customers SET next_rental_date = ?, next_invoice_date = ?, last_rental_date = ? WHERE id = ?"
+    ).run(next, next, today, cust.id);
+
+  } else {
+    // ── Case B: different frequencies → separate invoices ────────────────────
+    if (rentalDue) {
+      const billDate = cust.next_rental_date || today;
+      const rentalCharges = computeRentalCharges(billDate);
+      if (rentalCharges.total > 0) {
+        const { txCount } = createInvoice(
+          billDate, rentalCharges.total, [], rentalCharges.lines, cust.rental_frequency
+        );
+        invoicesCreated++;
+        transactionsCreated += txCount;
+      }
+      db.prepare(
+        "UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?"
+      ).run(addFrequency(billDate, cust.rental_frequency), today, cust.id);
+    }
+
+    if (invoiceDue) {
+      const billDate = cust.next_invoice_date || today;
+      const pendingOrders = getPendingOrders();
+      const salesTotal = computeOrdersTotal(pendingOrders);
+      if (salesTotal > 0 || pendingOrders.length > 0) {
+        const { txCount } = createInvoice(
+          billDate, salesTotal, pendingOrders, [], cust.invoice_frequency
+        );
+        invoicesCreated++;
+        transactionsCreated += txCount;
+      }
+      db.prepare(
+        "UPDATE customers SET next_invoice_date = ? WHERE id = ?"
+      ).run(addFrequency(billDate, cust.invoice_frequency), cust.id);
+    }
+  }
+
+  recalculateCustomerBalance(db, cust.id);
+  return { invoicesCreated, transactionsCreated };
+}
+
 // Manual entry: force-bill all customers with rental_frequency set, OR a specific subset.
 // Ignores cycle, bills one cycle dated today for everyone with on-hand cylinders.
 function runRentalsForce(db, customerIds) {
+  const cols = "id, rental_frequency, next_rental_date, customer_category, payment_terms, account_customer, invoice_frequency, next_invoice_date";
+  // Include customers who have either rental_frequency OR (commercial account with invoice_frequency)
+  const baseWhere = `(rental_frequency IS NOT NULL AND rental_frequency != '')
+    OR (customer_category = 'commercial' AND account_customer = 1 AND invoice_frequency IS NOT NULL AND invoice_frequency != '')`;
   const sql = customerIds && customerIds.length > 0
-    ? `SELECT id, rental_frequency, next_rental_date, customer_category, payment_terms FROM customers WHERE rental_frequency IS NOT NULL AND rental_frequency != '' AND id IN (${customerIds.map(() => "?").join(",")})`
-    : `SELECT id, rental_frequency, next_rental_date, customer_category, payment_terms FROM customers WHERE rental_frequency IS NOT NULL AND rental_frequency != ''`;
+    ? `SELECT ${cols} FROM customers WHERE (${baseWhere}) AND id IN (${customerIds.map(() => "?").join(",")})`
+    : `SELECT ${cols} FROM customers WHERE ${baseWhere}`;
   const eligible = customerIds && customerIds.length > 0
     ? db.prepare(sql).all(...customerIds)
     : db.prepare(sql).all();
@@ -4833,7 +5457,46 @@ function runRentalsForce(db, customerIds) {
 
   for (const cust of eligible) {
     try {
-      const r = db.transaction(() => billCustomerRental(db, cust, "force"))();
+      const isCommercialAccount = (cust.customer_category || "").toLowerCase() === "commercial" && cust.account_customer;
+      const r = db.transaction(() =>
+        isCommercialAccount
+          ? billCommercialAccount(db, cust, "force")
+          : billCustomerRental(db, cust, "force")
+      )();
+      if (r.invoicesCreated > 0) {
+        customersBilled++;
+        invoicesCreated += r.invoicesCreated;
+        transactionsCreated += r.transactionsCreated;
+      }
+    } catch (err) {
+      errors.push({ customer_id: cust.id, error: err.message });
+    }
+  }
+
+  return { customersBilled, invoicesCreated, transactionsCreated, errors, ranAt: new Date().toISOString() };
+}
+
+// Force-bill sales invoices only for commercial account customers.
+// Collects all pending delivered orders and creates one sales invoice per customer.
+// Does not touch rental billing or next_rental_date.
+function runSalesForce(db, customerIds) {
+  const cols = "id, rental_frequency, next_rental_date, customer_category, payment_terms, account_customer, invoice_frequency, next_invoice_date";
+  const baseWhere = "LOWER(customer_category) = 'commercial' AND account_customer = 1 AND (invoice_frequency IS NOT NULL AND invoice_frequency != '' OR rental_frequency IS NOT NULL AND rental_frequency != '')";
+  const sql = customerIds && customerIds.length > 0
+    ? `SELECT ${cols} FROM customers WHERE (${baseWhere}) AND id IN (${customerIds.map(() => "?").join(",")})`
+    : `SELECT ${cols} FROM customers WHERE ${baseWhere}`;
+  const eligible = customerIds && customerIds.length > 0
+    ? db.prepare(sql).all(...customerIds)
+    : db.prepare(sql).all();
+
+  let customersBilled = 0;
+  let invoicesCreated = 0;
+  let transactionsCreated = 0;
+  const errors = [];
+
+  for (const cust of eligible) {
+    try {
+      const r = db.transaction(() => billCommercialAccount(db, cust, "force-sales"))();
       if (r.invoicesCreated > 0) {
         customersBilled++;
         invoicesCreated += r.invoicesCreated;
@@ -4942,7 +5605,7 @@ function runAutoCloseOrders(db) {
         if (orderRow.invoice_id) {
           const inv = db.prepare("SELECT amount_paid, total FROM invoices WHERE id = ?").get(orderRow.invoice_id);
           if (inv && inv.total > 0 && inv.amount_paid >= inv.total) {
-            db.prepare("UPDATE orders SET status = 'paid' WHERE id = ?").run(order.id);
+            db.prepare("UPDATE orders SET status = 'closed' WHERE id = ?").run(order.id);
           }
         }
 

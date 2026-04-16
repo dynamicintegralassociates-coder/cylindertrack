@@ -66,6 +66,7 @@ const api = {
   initializeRentals: () => request("/rentals/initialize", { method: "POST" }),
   runDueRentals: () => request("/rentals/run-due", { method: "POST" }),
   generateRentalsForce: (customerIds) => request("/rentals/generate-now", { method: "POST", body: JSON.stringify({ customer_ids: customerIds || [] }) }),
+  generateSalesForce: (customerIds) => request("/rentals/generate-sales-now", { method: "POST", body: JSON.stringify({ customer_ids: customerIds || [] }) }),
 
   // Email
   getEmailConfig: () => request("/email/config"),
@@ -118,6 +119,7 @@ const api = {
   lookupPrice: (customer_id, order_detail) => request(`/orders/lookup-price?customer_id=${encodeURIComponent(customer_id || "")}&order_detail=${encodeURIComponent(order_detail || "")}`),
   getCustomerCylinderPrice: (custId, ctId) => request(`/pricing/customer/${custId}/cylinder/${ctId}`),
   getOrder: (id) => request(`/orders/${id}`),
+  getOrderCompletions: (id) => request(`/orders/${id}/completions`),
   updateCustomerPrice: (data) => request("/orders/update-customer-price", { method: "POST", body: JSON.stringify(data) }),
 
   // Invoices

@@ -143,6 +143,11 @@ function initDB() {
 
   // Migration: invoice_frequency on customers
   try { db.exec("ALTER TABLE customers ADD COLUMN invoice_frequency TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  // Migration: next_invoice_date for commercial account billing scheduler
+  try { db.exec("ALTER TABLE customers ADD COLUMN next_invoice_date TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+
+  // Migration: rename order status 'paid' → 'closed'
+  try { db.exec("UPDATE orders SET status = 'closed' WHERE status = 'paid'"); } catch(e) { /* ignore */ }
 
   // Migration: add item_type if missing
   try { db.exec("ALTER TABLE cylinder_types ADD COLUMN item_type TEXT DEFAULT 'cylinder'"); } catch(e) { /* exists */ }

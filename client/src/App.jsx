@@ -78,7 +78,7 @@ function orderStatusStyle(status) {
     dispatched:        { label: "DISPATCHED",        bg: "#3b82f622", fg: C.blue },
     delivered:         { label: "DELIVERED",         bg: "#06b6d422", fg: "#06b6d4" },
     invoiced:          { label: "INVOICED",          bg: "#8b5cf622", fg: C.purple },
-    paid:              { label: "PAID",              bg: "#22c55e22", fg: C.green },
+    closed:            { label: "CLOSED",             bg: "#22c55e22", fg: C.green },
     cancelled:         { label: "CANCELLED",         bg: "#6b728022", fg: C.muted },
     // Legacy fallthrough — shouldn't appear after migration but render gracefully
     confirmed:         { label: "CONFIRMED",         bg: "#3b82f622", fg: C.blue },
@@ -1964,6 +1964,17 @@ function RentalSchedulerControls({ customers, showToast, onComplete }) {
     finally { setBusy(false); }
   };
 
+  const forceSalesAll = async () => {
+    if (!confirm(`Force-generate sales invoices for ALL commercial account customers now? This collects all pending delivered orders into one invoice per customer.`)) return;
+    setBusy(true);
+    try {
+      const r = await api.generateSalesForce(null);
+      showToast(`${r.customersBilled} customers billed, ${r.invoicesCreated} invoices created`);
+      onComplete?.();
+    } catch (e) { showToast(e.message, "error"); }
+    finally { setBusy(false); }
+  };
+
   const forceSelected = async () => {
     if (selected.length === 0) return;
     if (!confirm(`Force-generate rental invoices for ${selected.length} selected customer(s), dated today?`)) return;
@@ -1971,6 +1982,20 @@ function RentalSchedulerControls({ customers, showToast, onComplete }) {
     try {
       const r = await api.generateRentalsForce(selected);
       showToast(`${r.customersBilled} customers billed, ${r.invoicesCreated} invoices, ${r.transactionsCreated} transactions`);
+      setSelected([]);
+      setShowSelector(false);
+      onComplete?.();
+    } catch (e) { showToast(e.message, "error"); }
+    finally { setBusy(false); }
+  };
+
+  const forceSalesSelected = async () => {
+    if (selected.length === 0) return;
+    if (!confirm(`Force-generate sales invoices for ${selected.length} selected customer(s)?`)) return;
+    setBusy(true);
+    try {
+      const r = await api.generateSalesForce(selected);
+      showToast(`${r.customersBilled} customers billed, ${r.invoicesCreated} invoices created`);
       setSelected([]);
       setShowSelector(false);
       onComplete?.();
@@ -1990,8 +2015,9 @@ function RentalSchedulerControls({ customers, showToast, onComplete }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={initializeRentals} disabled={busy} style={btnStyle(C.muted)}>Initialize Rental Cycles</button>
         <button onClick={runDue} disabled={busy} style={btnStyle(C.blue)}>{busy ? "Working..." : "Run Due Rentals Now"}</button>
-        <button onClick={forceAll} disabled={busy} style={btnStyle(C.accent)}>Force Generate All</button>
-        <button onClick={() => setShowSelector(s => !s)} disabled={busy} style={btnStyle(C.green)}>
+        <button onClick={forceAll} disabled={busy} style={btnStyle(C.accent)}>Force Rental Invoices (All)</button>
+        <button onClick={forceSalesAll} disabled={busy} style={btnStyle(C.green)}>Force Sales Invoices (All)</button>
+        <button onClick={() => setShowSelector(s => !s)} disabled={busy} style={btnStyle(C.muted)}>
           {showSelector ? "Hide Selector" : "Generate For Selected..."}
         </button>
       </div>
@@ -2024,9 +2050,12 @@ function RentalSchedulerControls({ customers, showToast, onComplete }) {
               ))
             )}
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <button onClick={forceSelected} disabled={busy || selected.length === 0} style={btnStyle(C.green)}>
-              Generate For {selected.length} Selected
+          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+            <button onClick={forceSelected} disabled={busy || selected.length === 0} style={btnStyle(C.accent)}>
+              Rental Invoice — {selected.length} Selected
+            </button>
+            <button onClick={forceSalesSelected} disabled={busy || selected.length === 0} style={btnStyle(C.green)}>
+              Sales Invoice — {selected.length} Selected
             </button>
             <button onClick={() => setSelected([])} disabled={selected.length === 0} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>Clear</button>
           </div>
@@ -2196,7 +2225,7 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
           <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["Invoice #", "Date", "PO#", "Total", "Paid", "Owed", "Status", ""].map(h => (
+                {["Invoice #", "Date", "Due Date", "PO#", "Total", "Paid", "Owed", "Status", ""].map(h => (
                   <th key={h} style={{ textAlign: "left", padding: "4px 6px", color: C.muted, fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
@@ -2204,10 +2233,12 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
             <tbody>
               {g.invoices.map(inv => {
                 const owed = (inv.total || 0) - (inv.amount_paid || 0);
+                const overdue = inv.due_date && inv.due_date < new Date().toISOString().split("T")[0] && inv.status === "open";
                 return (
                   <tr key={inv.id} style={{ borderBottom: `1px solid ${C.border}` }}>
                     <td style={{ padding: "4px 6px", color: C.accent, fontWeight: 600 }}>{inv.invoice_number || "—"}</td>
                     <td style={{ padding: "4px 6px" }}>{inv.invoice_date}</td>
+                    <td style={{ padding: "4px 6px", color: overdue ? C.red : C.text, fontWeight: overdue ? 700 : 400 }}>{inv.due_date || "—"}</td>
                     <td style={{ padding: "4px 6px", color: C.muted }}>{inv.po_number || "—"}</td>
                     <td style={{ padding: "4px 6px", fontWeight: 600 }} title="Includes GST">{fmtMoney(inv.total)}</td>
                     <td style={{ padding: "4px 6px", color: C.green }} title="Includes GST">{fmtMoney(inv.amount_paid)}</td>
@@ -2333,6 +2364,12 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
                     </button>
                   );
                 })()}
+                <button
+                  onClick={() => window.open(`/api/invoices/${selectedInvoice.id}/print`, "_blank")}
+                  style={{ ...btnStyle("#6b7280"), padding: "6px 12px", fontSize: 12 }}
+                >
+                  Print / PDF
+                </button>
                 <button onClick={() => { setSelectedInvoice(null); setDetailData(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>✕</button>
               </div>
             </div>
@@ -2342,12 +2379,17 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{formatCustomerDisplay(customerMap[selectedInvoice.customer_id]) || selectedInvoice.customer_name || selectedInvoice.address || "—"}</div>
               </div>
               <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Date</div>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice Date</div>
                 <div style={{ fontSize: 13 }}>{selectedInvoice.invoice_date}</div>
               </div>
               <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>PO Number</div>
-                <div style={{ fontSize: 13 }}>{selectedInvoice.po_number || "—"}</div>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Due Date</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: selectedInvoice.due_date && selectedInvoice.due_date < new Date().toISOString().split("T")[0] && selectedInvoice.status === "open" ? C.red : C.text }}>
+                  {selectedInvoice.due_date || "—"}
+                  {selectedInvoice.due_date && selectedInvoice.due_date < new Date().toISOString().split("T")[0] && selectedInvoice.status === "open" && (
+                    <span style={{ marginLeft: 6, fontSize: 10, background: C.red, color: "#fff", borderRadius: 3, padding: "1px 5px" }}>OVERDUE</span>
+                  )}
+                </div>
               </div>
               <div>
                 <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Status</div>
@@ -2369,8 +2411,80 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
               </div>
             </div>
 
-            {/* Line items */}
-            {detailData?.lines?.length > 0 && (
+            {/* Linked Orders — one section per order with its own line items */}
+            {detailData?.orderSections?.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 8 }}>Linked Orders</div>
+                {detailData.orderSections.map((section, si) => (
+                  <div key={section.order?.id || si} style={{ marginBottom: 12, background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+                    <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: C.accent }}>{section.order?.order_number || "—"}</span>
+                      <span style={{ fontSize: 12, color: C.muted }}>{section.order?.order_date || ""}</span>
+                      {section.order?.order_detail && (
+                        <span style={{ fontSize: 12, color: C.text }}>{section.order.order_detail}</span>
+                      )}
+                      {section.order?.po_number && (
+                        <span style={{ fontSize: 12, color: C.muted }}>PO: {section.order.po_number}</span>
+                      )}
+                    </div>
+                    {section.lines?.length > 0 ? (
+                      <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+                            <th style={{ textAlign: "left", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Item</th>
+                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Qty</th>
+                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Unit Price</th>
+                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {section.lines.map((l, i) => (
+                            <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                              <td style={{ padding: "5px 10px", fontWeight: 600 }}>{l.cylinder_label || "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.qty}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>No line items</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Rental Charges section */}
+            {detailData?.rentalLines?.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Rental Charges</div>
+                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                  <thead>
+                    <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+                      <th style={{ textAlign: "left", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Cylinder</th>
+                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Qty on Hand</th>
+                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Rate</th>
+                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Charge</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailData.rentalLines.map((l, i) => (
+                      <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "5px 10px", fontWeight: 600 }}>{l.cylinder_label || l.notes || "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.qty != null ? l.qty : "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.unit_price != null ? fmtCurrency(l.unit_price) : "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total != null ? l.line_total : l.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Fallback: flat line items for older invoices without orderSections */}
+            {!detailData?.orderSections?.length && !detailData?.rentalLines?.length && detailData?.lines?.length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Line Items</div>
                 <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", border: `1px solid ${C.border}`, borderRadius: 6 }}>
@@ -2518,6 +2632,14 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
 function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, emailConfig }) {
   const GST_RATE = 0.10;
   const [tab, setTab] = useState("history"); // history | generate
+  // Invoice detail modal (reuse the same pattern as InvoicesView)
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [detailData, setDetailData] = useState(null);
+  const openInvoiceDetail = async (inv) => {
+    setSelectedInvoice(inv);
+    setDetailData(null);
+    try { const d = await api.getInvoice(inv.invoice_id || inv.id); setDetailData(d); } catch (e) { /* tolerate */ }
+  };
 
   // 3.0.18: fallback customer fetch when parent prop is empty (same pattern as TrackingView)
   // and customer search filter for the history tab.
@@ -2694,23 +2816,41 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
           <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["Date", "Cylinder", "Qty", "Source", "Notes"].map(h => (
+                {["Date", "Cylinder", "Qty on Hand", "Invoice", "Due Date", "Source", "Invoice"].map(h => (
                   <th key={h} style={{ textAlign: "left", padding: "4px 6px", color: C.muted, fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {g.rows.map(r => (
-                <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                  <td style={{ padding: "4px 6px" }}>{r.date}</td>
-                  <td style={{ padding: "4px 6px" }}>{ctMap[r.cylinder_type]?.label || r.cylinder_type}</td>
-                  <td style={{ padding: "4px 6px", fontWeight: 600 }}>{r.qty}</td>
-                  <td style={{ padding: "4px 6px", color: C.muted }}>
-                    {r.source === "auto_rental" ? "Auto (scheduler)" : r.source === "rental_invoice" ? "Manual" : r.source}
-                  </td>
-                  <td style={{ padding: "4px 6px", color: C.muted, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.notes}</td>
-                </tr>
-              ))}
+              {g.rows.map(r => {
+                const today = new Date().toISOString().split("T")[0];
+                const overdue = r.invoice_due_date && r.invoice_due_date < today && r.invoice_status === "open";
+                return (
+                  <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td style={{ padding: "4px 6px" }}>{r.date}</td>
+                    <td style={{ padding: "4px 6px" }}>{ctMap[r.cylinder_type]?.label || r.cylinder_type}</td>
+                    <td style={{ padding: "4px 6px", fontWeight: 600 }}>{r.qty}</td>
+                    <td style={{ padding: "4px 6px", color: C.accent, fontWeight: 600 }}>{r.invoice_number || <span style={{ color: C.muted }}>—</span>}</td>
+                    <td style={{ padding: "4px 6px", color: overdue ? C.red : C.text, fontWeight: overdue ? 700 : 400 }}>
+                      {r.invoice_due_date || <span style={{ color: C.muted }}>—</span>}
+                      {overdue && <span style={{ marginLeft: 4, fontSize: 9, background: C.red, color: "#fff", borderRadius: 3, padding: "1px 4px" }}>OVERDUE</span>}
+                    </td>
+                    <td style={{ padding: "4px 6px", color: C.muted }}>
+                      {r.source === "auto_rental" ? "Auto (scheduler)" : r.source === "order_linked_rental" ? "Order linked" : r.source === "rental_invoice" ? "Manual" : r.source}
+                    </td>
+                    <td style={{ padding: "4px 6px" }}>
+                      {r.invoice_id ? (
+                        <button
+                          onClick={() => openInvoiceDetail(r)}
+                          style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: 0 }}
+                        >
+                          View
+                        </button>
+                      ) : <span style={{ color: C.muted }}>—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -2978,6 +3118,119 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
           )}
         </>
       )}
+
+      {/* Invoice detail modal — triggered from rental history "View" button */}
+      {selectedInvoice && (
+        <div onClick={() => { setSelectedInvoice(null); setDetailData(null); }} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex",
+          alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20,
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
+            padding: 24, maxWidth: 640, width: "100%", maxHeight: "90vh", overflowY: "auto",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: C.accent }}>{detailData?.invoice_number || selectedInvoice.invoice_number || "…"}</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {detailData && (
+                  <button onClick={() => window.open(`/api/invoices/${detailData.id}/print`, "_blank")} style={{ ...btnStyle("#6b7280"), padding: "6px 12px", fontSize: 12 }}>Print / PDF</button>
+                )}
+                <button onClick={() => { setSelectedInvoice(null); setDetailData(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>✕</button>
+              </div>
+            </div>
+            {!detailData ? (
+              <div style={{ padding: 32, textAlign: "center", color: C.muted }}>Loading…</div>
+            ) : (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                  <div><div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice Date</div><div style={{ fontSize: 13 }}>{detailData.invoice_date}</div></div>
+                  <div>
+                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Due Date</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: detailData.due_date && detailData.due_date < new Date().toISOString().split("T")[0] && detailData.status === "open" ? C.red : C.text }}>
+                      {detailData.due_date || "—"}
+                    </div>
+                  </div>
+                  <div><div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Status</div>
+                    <div style={{ marginTop: 2 }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, background: detailData.status === "paid" ? "#22c55e22" : "#f59e0b22", color: detailData.status === "paid" ? C.green : C.accent }}>{(detailData.status || "open").toUpperCase()}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Total (inc GST)</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>{fmtMoney(detailData.total)}</div>
+                    <div style={{ fontSize: 11, color: (detailData.total || 0) - (detailData.amount_paid || 0) > 0 ? C.red : C.green }}>
+                      Balance: {fmtMoney((detailData.total || 0) - (detailData.amount_paid || 0))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Linked Orders */}
+                {detailData.orderSections?.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Linked Orders</div>
+                    {detailData.orderSections.map((s, i) => (
+                      <div key={i} style={{ marginBottom: 8, background: C.panel, borderRadius: 6, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+                        <div style={{ padding: "6px 10px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, fontSize: 12, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, color: C.accent }}>{s.order?.order_number}</span>
+                          <span style={{ color: C.muted }}>{s.order?.order_date}</span>
+                          {s.order?.po_number && <span style={{ color: C.muted }}>PO: {s.order.po_number}</span>}
+                        </div>
+                        {s.lines?.map((l, j) => (
+                          <div key={j} style={{ padding: "4px 10px", fontSize: 11, display: "flex", justifyContent: "space-between", borderBottom: `1px solid ${C.border}` }}>
+                            <span>{l.cylinder_label} × {l.qty}</span>
+                            <span style={{ fontWeight: 600 }}>{fmtCurrency(l.line_total)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Rental lines */}
+                {detailData.rentalLines?.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Rental Charges</div>
+                    <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse", background: C.panel, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                      <thead><tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+                        <th style={{ padding: "4px 8px", textAlign: "left", color: C.muted, fontWeight: 600 }}>Cylinder</th>
+                        <th style={{ padding: "4px 8px", textAlign: "right", color: C.muted, fontWeight: 600 }}>Qty</th>
+                        <th style={{ padding: "4px 8px", textAlign: "right", color: C.muted, fontWeight: 600 }}>Rate</th>
+                        <th style={{ padding: "4px 8px", textAlign: "right", color: C.muted, fontWeight: 600 }}>Charge</th>
+                      </tr></thead>
+                      <tbody>
+                        {detailData.rentalLines.map((l, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                            <td style={{ padding: "4px 8px" }}>{l.cylinder_label}</td>
+                            <td style={{ padding: "4px 8px", textAlign: "right" }}>{l.qty}</td>
+                            <td style={{ padding: "4px 8px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
+                            <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Payments */}
+                {detailData.payments?.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Payments</div>
+                    {detailData.payments.map(p => (
+                      <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0", borderBottom: `1px solid ${C.border}` }}>
+                        <span style={{ color: C.muted }}>{p.date} · {p.method}</span>
+                        <span style={{ color: C.green, fontWeight: 600 }}>{fmtCurrency(grossOf(p.amount))}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3226,6 +3479,104 @@ function ManualCompletionPanel({ orderId, orderNumber, lines, showToast, onCompl
   );
 }
 
+
+// ==================== COMPLETION HISTORY PANEL ====================
+// Read-only view of Del/Ret/Roth transactions recorded against each line.
+// Shown in the order form when status is delivered/invoiced/closed.
+function CompletionHistoryPanel({ orderId, lines }) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    if (!orderId) return;
+    api.getOrderCompletions(orderId)
+      .then(r => setData(r && typeof r === "object" && "perLine" in r ? r : { perLine: r || [], optimoLevel: [] }))
+      .catch(() => setData({ perLine: [], optimoLevel: [] }));
+  }, [orderId]);
+
+  if (!data) return <div style={{ padding: 12, color: C.muted, fontSize: 12 }}>Loading completion history…</div>;
+
+  const { perLine = [], optimoLevel = [] } = data;
+
+  // Group per-line transactions by order_line_id
+  const byLine = {};
+  for (const t of perLine) {
+    if (!byLine[t.order_line_id]) byLine[t.order_line_id] = [];
+    byLine[t.order_line_id].push(t);
+  }
+
+  const typeLabel = { delivery: "DEL", return: "RET", return_other: "ROTH" };
+  const typeColor = { delivery: C.green, return: C.accent, return_other: C.purple };
+  const sourceLabel = { manual: "Manual", order: "Optimo (auto)", optimoroute: "Optimo (POD)" };
+
+  const statusBadge = (s) => {
+    const map = {
+      delivered:    { label: "DELIVERED", fg: C.green },
+      returned:     { label: "RETURNED",  fg: C.accent },
+      return_other: { label: "ROTH",      fg: C.purple },
+      cancelled:    { label: "CANCELLED", fg: C.muted },
+      open:         { label: "OPEN",      fg: C.muted },
+    };
+    const st = map[s] || { label: s?.toUpperCase() || "—", fg: C.muted };
+    return <span style={{ padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 700, background: `${st.fg}22`, color: st.fg }}>{st.label}</span>;
+  };
+
+  const txnChips = (txns) => txns.map(t => (
+    <span key={t.id} style={{
+      padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+      background: `${typeColor[t.type] || C.muted}22`, color: typeColor[t.type] || C.muted,
+    }}>
+      {typeLabel[t.type] || t.type}: {t.qty}
+      {t.foreign_owner ? ` (${t.foreign_owner})` : ""}
+      <span style={{ fontSize: 9, color: C.muted, marginLeft: 4 }}>{sourceLabel[t.source] || t.source}</span>
+    </span>
+  ));
+
+  const hasAny = perLine.length > 0 || optimoLevel.length > 0;
+
+  return (
+    <div style={{ marginTop: 16, padding: 14, background: C.panel, borderRadius: 8, border: `1px solid ${C.border}` }}>
+      <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+        Delivery Completion Record
+      </div>
+
+      {!hasAny && (
+        <div style={{ fontSize: 12, color: C.muted, padding: "6px 0" }}>
+          No completion transactions recorded yet. These are written when lines are delivered via the Manual Completion panel or when OptimoRoute syncs back.
+        </div>
+      )}
+
+      {/* Per-line rows */}
+      {(lines || []).map(ln => {
+        const lineTxns = byLine[ln.id] || [];
+        if (lineTxns.length === 0 && !ln.delivered_qty && ln.status === "open") return null;
+        return (
+          <div key={ln.id} style={{ marginBottom: 8, padding: "8px 10px", background: C.input, borderRadius: 6, border: `1px solid ${C.inputBorder}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: lineTxns.length > 0 ? 6 : 0 }}>
+              <span style={{ fontWeight: 700, fontSize: 12, flex: 1 }}>{ln.cylinder_label || ln.cylinder_type_id || "—"}</span>
+              <span style={{ fontSize: 11, color: C.muted }}>Ordered: {ln.qty}</span>
+              {ln.delivered_qty > 0 && <span style={{ fontSize: 11, color: C.green }}>Delivered: {ln.delivered_qty}</span>}
+              {statusBadge(ln.status)}
+            </div>
+            {lineTxns.length > 0 ? (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{txnChips(lineTxns)}</div>
+            ) : (
+              <div style={{ fontSize: 11, color: C.muted }}>Status updated — no raw transaction linked to this line</div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Optimo order-level POD row (no order_line_id — shown separately) */}
+      {optimoLevel.length > 0 && (
+        <div style={{ marginTop: 8, padding: "8px 10px", background: "#8b5cf611", borderRadius: 6, border: `1px solid #8b5cf633` }}>
+          <div style={{ fontSize: 11, color: C.purple, fontWeight: 700, marginBottom: 6 }}>
+            OptimoRoute POD (order-level — not per line)
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{txnChips(optimoLevel)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ==================== ORDERS VIEW ====================
 function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pendingOrderId, onPendingOrderHandled, pendingNewOrderCustomerId, onPendingNewOrderHandled }) {
@@ -3859,6 +4210,11 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                     }}
                   />
                 )}
+
+                {/* Completion history — read-only view for delivered/invoiced/closed orders */}
+                {editing && ["delivered", "invoiced", "closed"].includes(form._editing_status) && (
+                  <CompletionHistoryPanel orderId={form._editing_order_id} lines={form.lines} />
+                )}
               </div>
             )}
 
@@ -3971,7 +4327,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                 const o = orders.find(o => o.id === editing);
                 // 3.0.11: Once an order is past delivered/invoiced/paid, syncing back to
                 // Optimo doesn't make sense — the work is already done. Just show "Save Order".
-                const lockedFromOptimo = o && ["delivered", "invoiced", "paid", "cancelled"].includes(o.status);
+                const lockedFromOptimo = o && ["delivered", "invoiced", "closed", "cancelled"].includes(o.status);
                 if (o?.optimoroute_id && !lockedFromOptimo) return "Save & Sync to OptimoRoute";
                 return "Save Order";
               })()}
@@ -4895,7 +5251,6 @@ function AdministratorView({ showToast }) {
 
   const save = async () => {
     try {
-      // Only persist sequence-related keys from this screen
       const payload = {
         customer_seq_prefix: settings.customer_seq_prefix || "",
         customer_seq_padding: String(parseInt(settings.customer_seq_padding, 10) || 5),
@@ -4903,9 +5258,16 @@ function AdministratorView({ showToast }) {
         order_seq_prefix: settings.order_seq_prefix || "",
         order_seq_padding: String(parseInt(settings.order_seq_padding, 10) || 5),
         order_seq_next: String(parseInt(settings.order_seq_next, 10) || 1),
+        business_name: settings.business_name || "",
+        business_abn: settings.business_abn || "",
+        business_address: settings.business_address || "",
+        business_phone: settings.business_phone || "",
+        business_email: settings.business_email || "",
+        business_bank: settings.business_bank || "",
+        business_logo: settings.business_logo || "",
       };
       await api.updateSettings(payload);
-      showToast("Number sequences saved");
+      showToast("Settings saved");
     } catch (e) { showToast(e.message, "error"); }
   };
 
@@ -4970,8 +5332,100 @@ function AdministratorView({ showToast }) {
         <h2 style={{ fontSize: 20, fontWeight: 700 }}>Administrator</h2>
         <button onClick={save} style={btnStyle(C.green)}>Save Changes</button>
       </div>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
-        Configure number sequences. New customers and orders will be assigned the next number automatically and the counter will increment.
+
+      {/* Business / Invoice settings */}
+      <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Business Details</h3>
+      <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
+        These details appear on printed/PDF invoices. Leave blank to omit.
+      </div>
+      <Card>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+          {/* Logo upload — spans both columns, sits at the top */}
+          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "flex-start", gap: 20, padding: "12px 14px", background: C.input, borderRadius: 8, border: `1px solid ${C.inputBorder}` }}>
+            <div style={{ flexShrink: 0 }}>
+              {settings.business_logo ? (
+                <img
+                  src={settings.business_logo}
+                  alt="Business logo"
+                  style={{ maxHeight: 80, maxWidth: 200, objectFit: "contain", borderRadius: 4, background: "#fff", padding: 4 }}
+                />
+              ) : (
+                <div style={{ width: 160, height: 72, borderRadius: 6, border: `2px dashed ${C.inputBorder}`, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12 }}>
+                  No logo
+                </div>
+              )}
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Business Logo</label>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
+                PNG, JPG or SVG — recommended max width 400px. Appears top-left on printed invoices.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <label style={{ ...btnStyle(C.blue), padding: "6px 14px", fontSize: 12, cursor: "pointer", display: "inline-block" }}>
+                  {settings.business_logo ? "Replace Logo" : "Upload Logo"}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/svg+xml,image/gif,image/webp"
+                    style={{ display: "none" }}
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      if (file.size > 2 * 1024 * 1024) { showToast("Logo must be under 2 MB", "error"); return; }
+                      const reader = new FileReader();
+                      reader.onload = ev => update("business_logo", ev.target.result);
+                      reader.readAsDataURL(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {settings.business_logo && (
+                  <button
+                    onClick={() => { if (confirm("Remove the logo?")) update("business_logo", ""); }}
+                    style={{ ...btnStyle(C.red), padding: "6px 14px", fontSize: 12 }}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Business Name</label>
+            <input value={settings.business_name || ""} onChange={e => update("business_name", e.target.value)} style={inputStyle} placeholder="e.g. Acme Gas Pty Ltd" />
+          </div>
+          <div>
+            <label style={labelStyle}>ABN</label>
+            <input value={settings.business_abn || ""} onChange={e => update("business_abn", e.target.value)} style={inputStyle} placeholder="12 345 678 901" />
+          </div>
+          <div>
+            <label style={labelStyle}>Phone</label>
+            <input value={settings.business_phone || ""} onChange={e => update("business_phone", e.target.value)} style={inputStyle} placeholder="(07) 1234 5678" />
+          </div>
+          <div>
+            <label style={labelStyle}>Email</label>
+            <input value={settings.business_email || ""} onChange={e => update("business_email", e.target.value)} style={inputStyle} placeholder="accounts@yourbusiness.com.au" />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={labelStyle}>Address</label>
+            <input value={settings.business_address || ""} onChange={e => update("business_address", e.target.value)} style={inputStyle} placeholder="123 Main St, Brisbane QLD 4000" />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={labelStyle}>Bank / Payment Details <span style={{ color: C.muted, fontWeight: 400, textTransform: "none" }}>(shown at bottom of invoice — use line breaks for BSB, account, etc.)</span></label>
+            <textarea
+              value={settings.business_bank || ""}
+              onChange={e => update("business_bank", e.target.value)}
+              rows={3}
+              style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
+              placeholder={"BSB: 123-456\nAccount: 789 012 345\nAccount Name: Acme Gas Pty Ltd"}
+            />
+          </div>
+        </div>
+      </Card>
+
+      <h3 style={{ fontSize: 16, fontWeight: 700, margin: "20px 0 8px" }}>Number Sequences</h3>
+      <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
+        New customers and orders will be assigned the next number automatically and the counter will increment.
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <SeqEditor title="Customer Number Sequence" prefixKey="customer_seq_prefix" paddingKey="customer_seq_padding" nextKey="customer_seq_next" />
