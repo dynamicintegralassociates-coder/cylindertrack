@@ -5203,7 +5203,9 @@ export default function App() {
   if (authState === "setup") return <SetupScreen onDone={u => { setUser(u); setAuthState("app"); }} />;
   if (authState === "login") return <LoginScreen onDone={u => { setUser(u); setAuthState("app"); }} />;
 
- const navItems = [
+ const isAdmin = user?.role === "admin";
+
+  const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.dashboard },
     { id: "orders", label: "Orders", icon: Icons.route },
     { id: "customers", label: "Customers", icon: Icons.customers },
@@ -5214,11 +5216,11 @@ export default function App() {
     { id: "openingbalances", label: "Opening Balances", icon: Icons.cylinders },
     { id: "billing", label: "Billing", icon: Icons.billing },
     { id: "rentalhistory", label: "Rental History", icon: Icons.billing },
-    { id: "pricing", label: "Pricing Manager", icon: Icons.pricing },
     { id: "credits", label: "Credit Notes", icon: Icons.billing },
-    { id: "users", label: "Manage Users", icon: Icons.users },
-    ...(user?.role === "admin" ? [{ id: "auditlog", label: "Audit Log", icon: Icons.settings }] : []),
-    ...(user?.role === "admin" ? [{ id: "administrator", label: "Administrator", icon: Icons.settings }] : []),
+    ...(isAdmin ? [{ id: "pricing", label: "Pricing Manager", icon: Icons.pricing }] : []),
+    ...(isAdmin ? [{ id: "users", label: "Manage Users", icon: Icons.users }] : []),
+    ...(isAdmin ? [{ id: "auditlog", label: "Audit Log", icon: Icons.settings }] : []),
+    ...(isAdmin ? [{ id: "administrator", label: "Administrator", icon: Icons.settings }] : []),
   ];
 
   const renderView = () => {
@@ -5231,10 +5233,10 @@ export default function App() {
       case "tracking": return <TrackingView customers={customers.data} cylinderTypes={cylinderTypes.data} />;
       case "billing": return <BillingView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} reloadCustomers={customers.reload} emailEnabled={emailEnabled} emailConfig={emailConfig} />;
       case "rentalhistory": return <RentalHistoryView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} emailEnabled={emailEnabled} emailConfig={emailConfig} />;
-      case "pricing": return <PricingView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} userRole={user?.role} />;
+      case "pricing": return isAdmin ? <PricingView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} userRole={user?.role} /> : null;
       case "openingbalances": return <OpeningBalancesView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} />;
       case "optimoroute": return <OptimoRouteView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} refreshAll={refreshAll} />;
-      case "users": return <UsersView showToast={showToast} />;
+      case "users": return isAdmin ? <UsersView showToast={showToast} /> : null;
       case "credits": return <CreditsView customers={customers.data || []} showToast={showToast} userRole={user?.role} />;
       case "auditlog": return user?.role === "admin" ? <AuditLogView showToast={showToast} /> : null;
       case "administrator": return user?.role === "admin" ? <AdministratorView showToast={showToast} /> : null;
