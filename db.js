@@ -144,6 +144,7 @@ function initDB() {
   // Migration: add item_type if missing
   try { db.exec("ALTER TABLE cylinder_types ADD COLUMN item_type TEXT DEFAULT 'cylinder'"); } catch(e) { /* exists */ }
   try { db.exec("ALTER TABLE cylinder_types ADD COLUMN linked_sale_item_id TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE cylinder_types ADD COLUMN litres REAL DEFAULT 0"); } catch(e) { /* exists */ }
 
   // --- TRANSACTIONS ---
   db.exec(`

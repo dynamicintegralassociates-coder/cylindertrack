@@ -1506,13 +1506,13 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
 // ==================== CYLINDER TYPES VIEW ====================
 function CylinderTypesView({ cylinderTypes, reload, showToast }) {
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ label: "", default_price: 0, gas_group: "", item_type: "cylinder", sort_order: 0, linked_sale_item_id: "" });
+  const [form, setForm] = useState({ label: "", default_price: 0, gas_group: "", item_type: "cylinder", sort_order: 0, linked_sale_item_id: "", litres: 0 });
 
   const startEdit = (ct) => {
     setEditing(ct?.id || "new");
     setForm(ct
-      ? { label: ct.label, default_price: ct.default_price, gas_group: ct.gas_group || "", item_type: ct.item_type || "cylinder", sort_order: ct.sort_order || 0, linked_sale_item_id: ct.linked_sale_item_id || "" }
-      : { label: "", default_price: 0, gas_group: "", item_type: "cylinder", sort_order: 0, linked_sale_item_id: "" });
+      ? { label: ct.label, default_price: ct.default_price, gas_group: ct.gas_group || "", item_type: ct.item_type || "cylinder", sort_order: ct.sort_order || 0, linked_sale_item_id: ct.linked_sale_item_id || "", litres: ct.litres || 0 }
+      : { label: "", default_price: 0, gas_group: "", item_type: "cylinder", sort_order: 0, linked_sale_item_id: "", litres: 0 });
   };
 
   const save = async () => {
@@ -1556,6 +1556,13 @@ function CylinderTypesView({ cylinderTypes, reload, showToast }) {
                 <option value="sale">Sale item</option>
               </select>
             </div>
+            {form.item_type === "sale" && (
+              <div>
+                <label style={labelStyle}>Litres</label>
+                <input type="number" step="0.1" value={form.litres} onChange={e => setForm(p => ({ ...p, litres: parseFloat(e.target.value) || 0 }))} style={inputStyle} placeholder="e.g. 88.2" />
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Used for per-litre price calculations in Pricing Manager.</div>
+              </div>
+            )}
             {form.item_type === "cylinder" && (
               <div style={{ gridColumn: "1/-1" }}>
                 <label style={labelStyle}>Linked Sale Item</label>
@@ -1578,7 +1585,7 @@ function CylinderTypesView({ cylinderTypes, reload, showToast }) {
       )}
       <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
         <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-          {["Label", "Default Price", "Gas Group", "Type", "Linked Sale", "Actions"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
+          {["Label", "Default Price", "Gas Group", "Type", "Litres", "Linked Sale", "Actions"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
         </tr></thead>
         <tbody>
           {(cylinderTypes || []).map(ct => (
@@ -1587,6 +1594,9 @@ function CylinderTypesView({ cylinderTypes, reload, showToast }) {
               <td style={{ padding: "8px" }}>{fmtCurrency(ct.default_price)}</td>
               <td style={{ padding: "8px" }}>{ct.gas_group || "—"}</td>
               <td style={{ padding: "8px" }}>{ct.item_type}</td>
+              <td style={{ padding: "8px", color: ct.item_type === "sale" && ct.litres ? C.text : C.muted }}>
+                {ct.item_type === "sale" ? (ct.litres ? `${ct.litres}L` : "—") : "—"}
+              </td>
               <td style={{ padding: "8px", color: ct.linked_sale_item_id ? C.blue : C.muted }}>
                 {ct.item_type === "cylinder" ? (ct.linked_sale_item_id ? typeLabel(ct.linked_sale_item_id) : "—") : "—"}
               </td>
@@ -4102,14 +4112,21 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
   const [selCT, setSelCT] = useState("");
   const [bulkPrice, setBulkPrice] = useState("");
   const [pct, setPct] = useState("");
+  const [centsPerLitre, setCentsPerLitre] = useState("");
   const [selCustomers, setSelCustomers] = useState([]);
 
   // Customer price list tab
-  const [tab, setTab] = useState("bulk"); // bulk | customer
+  const [tab, setTab] = useState("bulk"); // bulk | customer | formula
   const [custSearch, setCustSearch] = useState("");
   const [bulkSearch, setBulkSearch] = useState("");
   const [selCustId, setSelCustId] = useState("");
   const [custPrices, setCustPrices] = useState([]);
+
+  // Formula customers (customer_type = 'formula')
+  const formulaCustomers = useMemo(() => (customers || []).filter(c => c.customer_type === "formula"), [customers]);
+  const [formulaSelCT, setFormulaSelCT] = useState("");
+  const [formulaCents, setFormulaCents] = useState("");
+  const [formulaSelCustomers, setFormulaSelCustomers] = useState([]);
 
   const pricingMap = useMemo(() => {
     const m = {};
@@ -4164,10 +4181,22 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
     try {
       const data = { cylinder_type: selCT, customer_ids: selCustomers };
       if (bulkMode === "percentage") { data.mode = "percentage"; data.percentage = parseFloat(pct); }
+      else if (bulkMode === "per_litre") { data.mode = "per_litre"; data.cents_per_litre = parseFloat(centsPerLitre); }
       else { data.price = parseFloat(bulkPrice); }
       const r = await api.bulkPrice(data);
       pricing.reload();
       let msg = `${r.updated} customers updated`;
+      if (r.skippedFixed > 0) msg += `, ${r.skippedFixed} skipped (fixed price active)`;
+      showToast(msg);
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  const applyFormulaBulk = async () => {
+    if (!formulaSelCT || !formulaSelCustomers.length || !formulaCents) return;
+    try {
+      const r = await api.bulkPrice({ cylinder_type: formulaSelCT, customer_ids: formulaSelCustomers, mode: "per_litre", cents_per_litre: parseFloat(formulaCents) });
+      pricing.reload();
+      let msg = `${r.updated} formula customers updated`;
       if (r.skippedFixed > 0) msg += `, ${r.skippedFixed} skipped (fixed price active)`;
       showToast(msg);
     } catch (e) { showToast(e.message, "error"); }
@@ -4178,6 +4207,11 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
     else setSelCustomers((customers || []).map(c => c.id));
   };
 
+  const toggleAllFormula = () => {
+    if (formulaSelCustomers.length === formulaCustomers.length) setFormulaSelCustomers([]);
+    else setFormulaSelCustomers(formulaCustomers.map(c => c.id));
+  };
+
   return (
     <div>
       <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Pricing Manager</h2>
@@ -4186,6 +4220,7 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
       <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.panel, borderRadius: 8, padding: 4 }}>
         <button onClick={() => setTab("bulk")} style={{ padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer", background: tab === "bulk" ? C.accent : "transparent", color: tab === "bulk" ? "#000" : C.muted, fontWeight: 600, fontSize: 13 }}>Bulk Update</button>
         <button onClick={() => setTab("customer")} style={{ padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer", background: tab === "customer" ? C.accent : "transparent", color: tab === "customer" ? "#000" : C.muted, fontWeight: 600, fontSize: 13 }}>Customer Price List</button>
+        <button onClick={() => setTab("formula")} style={{ padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer", background: tab === "formula" ? C.accent : "transparent", color: tab === "formula" ? "#000" : C.muted, fontWeight: 600, fontSize: 13 }}>Formula Customers</button>
       </div>
 
       {/* ─── BULK UPDATE TAB ─── */}
@@ -4194,19 +4229,26 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
           <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
             <button onClick={() => setBulkMode("fixed")} style={btnStyle(bulkMode === "fixed" ? C.accent : C.muted)}>Set Fixed Price</button>
             <button onClick={() => setBulkMode("percentage")} style={btnStyle(bulkMode === "percentage" ? C.accent : C.muted)}>% Increase</button>
+            <button onClick={() => setBulkMode("per_litre")} style={btnStyle(bulkMode === "per_litre" ? C.accent : C.muted)}>Increase per ltr</button>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
             <div>
               <label style={labelStyle}>Cylinder Type</label>
               <select value={selCT} onChange={e => setSelCT(e.target.value)} style={{ ...inputStyle, width: 240 }}>
                 <option value="">Select...</option>
-                {(cylinderTypes || []).map(ct => <option key={ct.id} value={ct.id}>{ct.label} (default: {fmtCurrency(ct.default_price)})</option>)}
+                {(cylinderTypes || []).map(ct => <option key={ct.id} value={ct.id}>{ct.label} (default: {fmtCurrency(ct.default_price)}){ct.item_type === "sale" && ct.litres ? ` · ${ct.litres}L` : ""}</option>)}
               </select>
             </div>
             {bulkMode === "fixed" ? (
-              <div><label style={labelStyle}>New Price</label><input type="number" step="0.01" value={bulkPrice} onChange={e => setBulkPrice(e.target.value)} style={{ ...inputStyle, width: 120 }} /></div>
-            ) : (
+              <div><label style={labelStyle}>New Price ($)</label><input type="number" step="0.01" value={bulkPrice} onChange={e => setBulkPrice(e.target.value)} style={{ ...inputStyle, width: 120 }} /></div>
+            ) : bulkMode === "percentage" ? (
               <div><label style={labelStyle}>Increase %</label><input type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} style={{ ...inputStyle, width: 120 }} /></div>
+            ) : (
+              <div>
+                <label style={labelStyle}>Cents per litre</label>
+                <input type="number" step="0.001" value={centsPerLitre} onChange={e => setCentsPerLitre(e.target.value)} style={{ ...inputStyle, width: 140 }} placeholder="e.g. 0.05" />
+                {selCT && (() => { const ct = (cylinderTypes || []).find(c => c.id === selCT); return ct?.litres ? <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>+${(ct.litres * (parseFloat(centsPerLitre) || 0)).toFixed(4)} per unit</div> : <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>No litres set on this type</div>; })()}
+              </div>
             )}
             <button onClick={applyBulk} disabled={!selCT || selCustomers.length === 0} style={btnStyle(C.green)}>Apply</button>
           </div>
@@ -4324,6 +4366,86 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
             </Card>
           )}
         </div>
+      )}
+
+      {/* ─── FORMULA CUSTOMERS TAB ─── */}
+      {tab === "formula" && (
+        <Card>
+          <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
+            Customers with <strong>customer type = formula</strong> ({formulaCustomers.length} customers). Apply a per-litre price increase across all or selected formula customers.
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
+            <div>
+              <label style={labelStyle}>Sale Item (with litres)</label>
+              <select value={formulaSelCT} onChange={e => setFormulaSelCT(e.target.value)} style={{ ...inputStyle, width: 240 }}>
+                <option value="">Select...</option>
+                {(cylinderTypes || []).filter(ct => ct.item_type === "sale" && ct.litres).map(ct => (
+                  <option key={ct.id} value={ct.id}>{ct.label} · {ct.litres}L · default {fmtCurrency(ct.default_price)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Cents per litre</label>
+              <input type="number" step="0.001" value={formulaCents} onChange={e => setFormulaCents(e.target.value)} style={{ ...inputStyle, width: 140 }} placeholder="e.g. 0.05" />
+              {formulaSelCT && formulaCents && (() => {
+                const ct = (cylinderTypes || []).find(c => c.id === formulaSelCT);
+                return ct?.litres ? <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>+${(ct.litres * (parseFloat(formulaCents) || 0)).toFixed(4)} per unit</div> : null;
+              })()}
+            </div>
+            <button onClick={applyFormulaBulk} disabled={!formulaSelCT || !formulaCents || formulaSelCustomers.length === 0} style={btnStyle(C.green)}>Apply Increase</button>
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, display: "flex", gap: 12, alignItems: "center" }}>
+            <button onClick={toggleAllFormula} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 12 }}>
+              {formulaSelCustomers.length === formulaCustomers.length ? "Deselect All" : "Select All"}
+            </button>
+            <span>· {formulaSelCustomers.length} selected · {formulaCustomers.length} formula customers</span>
+          </div>
+          {formulaCustomers.length === 0 ? (
+            <div style={{ color: C.muted, fontSize: 13, padding: 16 }}>No customers with customer type "formula" found.</div>
+          ) : (
+            <div style={{ maxHeight: 400, overflowY: "auto", border: `1px solid ${C.border}`, borderRadius: 6 }}>
+              <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                <thead style={{ position: "sticky", top: 0, background: C.card }}>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <th style={{ padding: "6px 10px", width: 30 }}></th>
+                    <th style={{ padding: "6px 10px", textAlign: "left", color: C.muted, fontWeight: 600 }}>Customer</th>
+                    {formulaSelCT && <th style={{ padding: "6px 10px", textAlign: "right", color: C.muted, fontWeight: 600 }}>Current Price</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {formulaCustomers.map(c => {
+                    const cp = formulaSelCT ? pricingMap[`${c.id}:${formulaSelCT}`] : null;
+                    const ct = formulaSelCT ? (cylinderTypes || []).find(x => x.id === formulaSelCT) : null;
+                    const displayPrice = cp ? cp.price : ct?.default_price;
+                    return (
+                      <tr key={c.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "4px 10px" }}>
+                          <input type="checkbox" checked={formulaSelCustomers.includes(c.id)} onChange={() => setFormulaSelCustomers(s => s.includes(c.id) ? s.filter(x => x !== c.id) : [...s, c.id])} />
+                        </td>
+                        <td style={{ padding: "4px 10px" }}>
+                          {c.account_number && <span style={{ color: C.accent, fontWeight: 600, marginRight: 8 }}>{c.account_number}</span>}
+                          <span style={{ fontWeight: c.name ? 600 : 400 }}>{c.name || c.address || "(unnamed)"}</span>
+                          {c.name && c.address && <span style={{ color: C.muted, marginLeft: 8, fontSize: 11 }}>— {c.address}</span>}
+                        </td>
+                        {formulaSelCT && (
+                          <td style={{ padding: "4px 10px", textAlign: "right", fontWeight: 600, color: cp ? C.accent : C.muted }}>
+                            {displayPrice != null ? fmtCurrency(displayPrice) : "—"}
+                            {cp && <span style={{ fontSize: 9, marginLeft: 4, color: C.accent }}>●</span>}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {formulaSelCT && (
+            <div style={{ marginTop: 8, fontSize: 11, color: C.muted }}>
+              <span style={{ color: C.accent }}>●</span> = Custom price · Customers with active fixed-price contracts are skipped automatically.
+            </div>
+          )}
+        </Card>
       )}
     </div>
   );

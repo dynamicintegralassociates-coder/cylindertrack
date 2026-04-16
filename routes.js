@@ -614,24 +614,24 @@ module.exports = function createRoutes(db) {
   });
 
   router.post("/cylinder-types", (req, res) => {
-    const { label, default_price, gas_group, item_type, sort_order, linked_sale_item_id } = req.body;
+    const { label, default_price, gas_group, item_type, sort_order, linked_sale_item_id, litres } = req.body;
     if (!label?.trim()) return res.status(400).json({ error: "Label is required" });
     const id = uid();
     db.prepare(
-      "INSERT INTO cylinder_types (id, label, default_price, gas_group, item_type, sort_order, linked_sale_item_id) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).run(id, label.trim(), default_price || 0, gas_group || "", item_type || "cylinder", sort_order || 0, linked_sale_item_id || "");
+      "INSERT INTO cylinder_types (id, label, default_price, gas_group, item_type, sort_order, linked_sale_item_id, litres) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, label.trim(), default_price || 0, gas_group || "", item_type || "cylinder", sort_order || 0, linked_sale_item_id || "", litres || 0);
     logCreate(db, req, "cylinder_types", id, snapshot(db, "cylinder_types", id),
       `Created cylinder type: ${label.trim()} @ $${default_price || 0}`);
     res.json({ id, label: label.trim() });
   });
 
   router.put("/cylinder-types/:id", (req, res) => {
-    const { label, default_price, gas_group, item_type, sort_order, linked_sale_item_id } = req.body;
+    const { label, default_price, gas_group, item_type, sort_order, linked_sale_item_id, litres } = req.body;
     if (!label?.trim()) return res.status(400).json({ error: "Label is required" });
     const before = snapshot(db, "cylinder_types", req.params.id);
     db.prepare(
-      "UPDATE cylinder_types SET label=?, default_price=?, gas_group=?, item_type=?, sort_order=?, linked_sale_item_id=? WHERE id=?"
-    ).run(label.trim(), default_price || 0, gas_group || "", item_type || "cylinder", sort_order || 0, linked_sale_item_id || "", req.params.id);
+      "UPDATE cylinder_types SET label=?, default_price=?, gas_group=?, item_type=?, sort_order=?, linked_sale_item_id=?, litres=? WHERE id=?"
+    ).run(label.trim(), default_price || 0, gas_group || "", item_type || "cylinder", sort_order || 0, linked_sale_item_id || "", litres || 0, req.params.id);
     logUpdate(db, req, "cylinder_types", req.params.id, before, snapshot(db, "cylinder_types", req.params.id),
       `Updated cylinder type: ${label.trim()}`);
     res.json({ success: true });
@@ -3612,14 +3612,14 @@ module.exports = function createRoutes(db) {
 
   // Bulk pricing — skips customers with active fixed price contracts
   router.post("/pricing/bulk", (req, res) => {
-    const { cylinder_type, price, customer_ids, mode, percentage } = req.body;
+    const { cylinder_type, price, customer_ids, mode, percentage, cents_per_litre } = req.body;
     if (!cylinder_type || !customer_ids?.length) return res.status(400).json({ error: "Missing fields" });
     const today = new Date().toISOString().split("T")[0];
     const stmt = db.prepare(
       "INSERT OR REPLACE INTO customer_pricing (customer_id, cylinder_type, price, fixed_price, fixed_from, fixed_to) VALUES (?, ?, ?, ?, ?, ?)"
     );
     const histStmt = db.prepare("INSERT INTO price_history (customer_id, cylinder_type, price, effective_from) VALUES (?, ?, ?, ?)");
-    const cylinderTypeData = db.prepare("SELECT default_price FROM cylinder_types WHERE id = ?").get(cylinder_type);
+    const cylinderTypeData = db.prepare("SELECT default_price, litres FROM cylinder_types WHERE id = ?").get(cylinder_type);
     let updated = 0;
     let skippedFixed = 0;
     const apply = db.transaction(() => {
@@ -3637,6 +3637,11 @@ module.exports = function createRoutes(db) {
         if (mode === "percentage" && percentage) {
           const basePrice = existing ? existing.price : (cylinderTypeData?.default_price || 0);
           newPrice = Math.round(basePrice * (1 + percentage / 100) * 100) / 100;
+        } else if (mode === "per_litre" && cents_per_litre) {
+          const litres = cylinderTypeData?.litres || 0;
+          const basePrice = existing ? existing.price : (cylinderTypeData?.default_price || 0);
+          const increase = Math.round(litres * cents_per_litre * 100) / 100;
+          newPrice = Math.round((basePrice + increase) * 100) / 100;
         } else {
           newPrice = price;
         }
@@ -3647,12 +3652,13 @@ module.exports = function createRoutes(db) {
       }
     });
     apply();
+    const modeSummary = mode === "percentage" ? `${percentage}%` : mode === "per_litre" ? `${cents_per_litre}c/ltr` : `$${price}`;
     logAudit(db, req, {
       action: "bulk_update",
       table: "customer_pricing",
       record_id: cylinder_type,
-      after: { cylinder_type, mode, price, percentage, customers_targeted: customer_ids.length, updated, skippedFixed },
-      summary: `Bulk pricing update on ${cylinder_type}: ${mode === "percentage" ? `${percentage}%` : `$${price}`} → ${updated} customers updated, ${skippedFixed} skipped (fixed contracts)`,
+      after: { cylinder_type, mode, price, percentage, cents_per_litre, customers_targeted: customer_ids.length, updated, skippedFixed },
+      summary: `Bulk pricing update on ${cylinder_type}: ${modeSummary} → ${updated} customers updated, ${skippedFixed} skipped (fixed contracts)`,
     });
     res.json({ success: true, updated, skippedFixed });
   });
