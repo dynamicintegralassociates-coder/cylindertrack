@@ -4123,7 +4123,7 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
   const [custPrices, setCustPrices] = useState([]);
 
   // Formula customers (customer_type = 'formula')
-  const formulaCustomers = useMemo(() => (customers || []).filter(c => c.customer_type === "formula"), [customers]);
+  const formulaCustomers = useMemo(() => (customers || []).filter(c => (c.customer_type || "").toLowerCase() === "formula"), [customers]);
   const [formulaSelCT, setFormulaSelCT] = useState("");
   const [formulaCents, setFormulaCents] = useState("");
   const [formulaSelCustomers, setFormulaSelCustomers] = useState([]);
