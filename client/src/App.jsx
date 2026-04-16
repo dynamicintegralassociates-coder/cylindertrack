@@ -3975,7 +3975,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
       )}
 
       {/* ORDER LIST */}
-      <input placeholder="Search orders..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, marginBottom: 16, maxWidth: 400 }} />
+      <input placeholder="Search by customer, address, contact, phone, PO#, order#..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, marginBottom: 16, maxWidth: 480 }} />
 
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
