@@ -44,12 +44,14 @@ const fmtMoneyLabel = (netValue) => `${fmtCurrency(grossOf(netValue))} inc GST`;
 // Shared customer display formatter. Company name wins, falls back to contact
 // person. Optionally append the delivery address (used on the orders screen
 // header; omitted in the compact bottom list).
-function formatCustomerDisplay(customer, { includeAddress = false } = {}) {
+function formatCustomerDisplay(customer) {
   if (!customer) return "";
-  const primary = (customer.company_name || "").trim() || (customer.contact_person || "").trim() || "";
-  if (!includeAddress) return primary;
-  const addr = (customer.delivery_address || customer.address || "").trim();
-  return addr ? `${primary} — ${addr}` : primary;
+  const name = (customer.name || "").trim();
+  if (name) return name;
+  const contact = (customer.contact || "").trim();
+  const address = (customer.address || "").trim();
+  if (contact && address) return `${contact} — ${address}`;
+  return contact || address || "";
 }
 
 // Round 3: 7-state order status model. Maps each status to a label, badge color, and bg.
@@ -700,7 +702,7 @@ function DashboardView({ stats }) {
               {stats.orders.recent.map(o => (
                 <tr key={o.id} style={{ borderBottom: `1px solid ${C.border}` }}>
                   <td style={{ padding: "4px 8px" }}>{o.order_date}</td>
-                  <td style={{ padding: "4px 8px", fontWeight: 600 }}>{o.customer_name || o.customer_name_lookup || "—"}</td>
+                  <td style={{ padding: "4px 8px", fontWeight: 600 }}>{o.customer_name || o.customer_name_lookup || o.address || "—"}</td>
                   <td style={{ padding: "4px 8px" }}>{o.order_detail || "—"}</td>
                   <td style={{ padding: "4px 8px" }}>{o.unit_price ? fmtCurrency(o.unit_price) : "—"}</td>
                   <td style={{ padding: "4px 8px", color: C.green, fontWeight: 600 }} title="Includes GST">{o.total_price ? fmtMoney(o.total_price) : "—"}</td>
@@ -1761,7 +1763,7 @@ function TrackingView({ customers, cylinderTypes }) {
             {matchingCustomers.map(c => (
               <div key={c.id} onMouseDown={() => { setFilter(c.id); setFilterOpen(false); }}
                 style={{ padding: "8px 12px", cursor: "pointer", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
-                <div style={{ fontWeight: 600 }}>{c.name || "(no name)"}</div>
+                <div style={{ fontWeight: 600 }}>{formatCustomerDisplay(c) || "(no name)"}</div>
                 <div style={{ color: C.muted, fontSize: 11 }}>
                   {[c.account_number, c.address].filter(Boolean).join(" · ")}
                 </div>
@@ -1780,7 +1782,7 @@ function TrackingView({ customers, cylinderTypes }) {
           <tbody>
             {(onHand.data || []).filter(r => !filter || r.customer_id === filter).map((r, i) => (
               <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "6px 8px" }}>{r.customer_name || customerMap[r.customer_id]?.name || r.customer_id}</td>
+                <td style={{ padding: "6px 8px" }}>{formatCustomerDisplay(customerMap[r.customer_id]) || r.customer_name || r.address || r.customer_id}</td>
                 <td style={{ padding: "6px 8px" }}>{r.cylinder_label || ctMap[r.cylinder_type]?.label || r.cylinder_type}</td>
                 <td style={{ padding: "6px 8px", fontWeight: 700, color: r.on_hand > 0 ? C.accent : C.green }}>{r.on_hand}</td>
               </tr>
@@ -1799,7 +1801,7 @@ function TrackingView({ customers, cylinderTypes }) {
             {filteredTxs.map(tx => (
               <tr key={tx.id} style={{ borderBottom: `1px solid ${C.border}` }}>
                 <td style={{ padding: "4px 8px" }}>{tx.date}</td>
-                <td style={{ padding: "4px 8px" }}>{tx.customer_name || customerMap[tx.customer_id]?.name || "?"}</td>
+                <td style={{ padding: "4px 8px" }}>{formatCustomerDisplay(customerMap[tx.customer_id]) || tx.customer_name || tx.address || "?"}</td>
                 <td style={{ padding: "4px 8px" }}>
                   <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: tx.type === "delivery" ? "#22c55e22" : "#ef444422", color: tx.type === "delivery" ? C.green : C.red }}>{tx.type}</span>
                 </td>
@@ -1925,7 +1927,7 @@ function RentalSchedulerControls({ customers, showToast, onComplete }) {
                 <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", fontSize: 12 }}>
                   <input type="checkbox" checked={selected.includes(c.id)} onChange={() => toggleSel(c.id)} />
                   <span style={{ color: C.accent, fontWeight: 600, minWidth: 80 }}>{c.account_number || "—"}</span>
-                  <span style={{ fontWeight: 500 }}>{c.name || "(no name)"}</span>
+                  <span style={{ fontWeight: 500 }}>{formatCustomerDisplay(c) || "(no name)"}</span>
                   <span style={{ color: C.muted, marginLeft: "auto", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.address}</span>
                   <span style={{ padding: "1px 6px", borderRadius: 3, fontSize: 9, fontWeight: 700, background: (c.customer_category || "").toLowerCase() === "commercial" ? "#3b82f622" : "#22c55e22", color: (c.customer_category || "").toLowerCase() === "commercial" ? C.blue : C.green }}>
                     {(c.customer_category || "?").toUpperCase().slice(0, 4)}
@@ -2249,7 +2251,7 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Customer</div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{selectedInvoice.customer_name || customerMap[selectedInvoice.customer_id]?.name || "—"}</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{formatCustomerDisplay(customerMap[selectedInvoice.customer_id]) || selectedInvoice.customer_name || selectedInvoice.address || "—"}</div>
               </div>
               <div>
                 <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Date</div>
@@ -3283,7 +3285,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
     })();
     setForm(f => ({
       ...f,
-      customer_id: c.id, address: c.address || "", customer_name: c.name || "",
+      customer_id: c.id, address: c.address || "", customer_name: formatCustomerDisplay(c),
       payment_ref: c.payment_ref || "", notes: c.notes || "", duration: parsedDur,
     }));
     setCustSearch("");
@@ -3294,7 +3296,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
       const result = await api.createCustomer(newCust);
       showToast("Customer created");
       reloadCustomers();
-      setForm(f => ({ ...f, customer_id: result.id, address: newCust.address || "", customer_name: newCust.name || "", payment_ref: newCust.payment_ref || "" }));
+      setForm(f => ({ ...f, customer_id: result.id, address: newCust.address || "", customer_name: formatCustomerDisplay(newCust), payment_ref: newCust.payment_ref || "" }));
       setShowNewCust(false);
       setNewCust({ name: "", contact: "", phone: "", email: "", address: "", payment_ref: "" });
     } catch (e) { showToast(e.message, "error"); }
@@ -3878,7 +3880,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
               <tr key={o.id} style={{ borderBottom: `1px solid ${C.border}`, background: editing === o.id ? "#f59e0b08" : "transparent" }}>
                 <td style={{ padding: "6px 8px", color: C.accent, fontWeight: 600 }}>{o.order_number || "—"}</td>
                 <td style={{ padding: "6px 8px" }}>{o.order_date}</td>
-                <td style={{ padding: "6px 8px", fontWeight: 600 }}>{o.customer_name || o.customer_name_lookup || "—"}</td>
+                <td style={{ padding: "6px 8px", fontWeight: 600 }}>{o.customer_name || o.customer_name_lookup || o.address || "—"}</td>
                 <td style={{ padding: "6px 8px", color: C.muted }}>{o.po_number || "—"}</td>
                 <td style={{ padding: "6px 8px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.order_detail || "—"}</td>
                 <td style={{ padding: "6px 8px", fontWeight: 700, color: C.green }}>{o.total_price ? fmtCurrency(o.total_price) : "—"}</td>
@@ -5231,7 +5233,7 @@ export default function App() {
                         <div key={c.id}
                           onMouseDown={() => { setView("customers"); setGlobalSearchOpen(false); setGlobalSearch(""); }}
                           style={{ padding: "8px 12px", cursor: "pointer", borderBottom: `1px solid ${C.border}` }}>
-                          <div style={{ fontSize: 12, fontWeight: 600 }}>{c.name || "(no name)"}</div>
+                          <div style={{ fontSize: 12, fontWeight: 600 }}>{formatCustomerDisplay(c) || "(no name)"}</div>
                           <div style={{ fontSize: 10, color: C.muted }}>
                             {[c.account_number, c.address].filter(Boolean).join(" · ")}
                           </div>
