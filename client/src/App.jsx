@@ -1375,6 +1375,32 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
               </div>
             )}
 
+            {/* Pricing panel — only on existing customers */}
+            {editing !== "new" && custPriceList.length > 0 && (
+              <>
+                <div style={sectionStyle}>Customer Pricing</div>
+                <div style={{ gridColumn: "1/-1", overflowX: "auto" }}>
+                  <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                        {["Item", "Type", "Default $", "Customer $", "Fixed", "Fixed From", "Fixed To", ""].map(h => (
+                          <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {custPriceList.map(cp => (
+                        <CustPriceRow key={cp.cylinder_type} cp={cp} onSave={saveCustPrice} />
+                      ))}
+                    </tbody>
+                  </table>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                    Prices in <span style={{ color: C.accent }}>amber</span> are custom for this customer. Leave at default to use the standard price.
+                  </div>
+                </div>
+              </>
+            )}
+
             {/* Orders & Balance panel — only on existing customers */}
             {editing !== "new" && (
               <>
@@ -1420,33 +1446,6 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
               </>
             )}
           </div>
-          {editing !== "new" && custPriceList.length > 0 && (
-            <div style={{ gridColumn: "1/-1", marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
-                Customer Pricing
-              </div>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                      {["Item", "Type", "Default $", "Customer $", "Fixed", "Fixed From", "Fixed To", ""].map(h => (
-                        <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {custPriceList.map(cp => (
-                      <CustPriceRow key={cp.cylinder_type} cp={cp} onSave={saveCustPrice} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
-                Prices highlighted in <span style={{ color: C.accent }}>amber</span> are custom for this customer. Leave at default to use the standard price.
-              </div>
-            </div>
-          )}
-
           <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
             <button onClick={save} style={btnStyle(C.green)}>Save</button>
             <button onClick={() => setEditing(null)} style={btnStyle(C.muted)}>Cancel</button>
