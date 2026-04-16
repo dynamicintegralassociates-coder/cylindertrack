@@ -9,6 +9,24 @@ const { exportFullBackup, restoreFullBackup, validateBackup, BACKUP_TABLES } = r
 
 const uid = () => nodeCrypto.randomBytes(6).toString("hex");
 
+// Calculate invoice due date from invoice date + customer payment terms.
+// paymentTerms: "COD" | "14 days" | "30 days" | "EOM 14 days" (case-insensitive)
+function calculateDueDate(invoiceDate, paymentTerms) {
+  if (!invoiceDate) return "";
+  const pt = (paymentTerms || "").toLowerCase().trim();
+  if (!pt || pt === "cod") return invoiceDate;
+  const d = new Date(invoiceDate + "T00:00:00");
+  if (isNaN(d.getTime())) return "";
+  if (pt === "14 days") { d.setDate(d.getDate() + 14); return d.toISOString().split("T")[0]; }
+  if (pt === "30 days") { d.setDate(d.getDate() + 30); return d.toISOString().split("T")[0]; }
+  if (pt === "eom 14 days") {
+    const eom = new Date(d.getFullYear(), d.getMonth() + 1, 0); // last day of this month
+    eom.setDate(eom.getDate() + 14);
+    return eom.toISOString().split("T")[0];
+  }
+  return "";
+}
+
 // Atomically generate the next number from a sequence stored in settings.
 // Returns formatted string like "CUST-00001". Increments next counter.
 function nextSequenceNumber(db, kind /* "customer" | "order" */) {
@@ -235,7 +253,7 @@ module.exports = function createRoutes(db) {
       state, accounts_contact, accounts_email, accounts_phone, compliance_number, pressure_test, abn,
       duration, milk_run_days, milk_run_frequency, rental_frequency, customer_type,
       customer_type_start, customer_type_end, rep_name, payment_terms, internal_notes, customer_category,
-      chain, alternative_contact_name, alternative_contact_phone, compliance_not_required,
+      chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, invoice_frequency,
     } = req.body;
     // For non-residential customers, name is required.
     // For residential customers, name OR address is required (can't both be blank).
@@ -252,8 +270,8 @@ module.exports = function createRoutes(db) {
         account_number, state, internal_notes, accounts_contact, accounts_email, accounts_phone,
         compliance_number, pressure_test, abn, duration, milk_run_days, milk_run_frequency,
         rental_frequency, customer_type, customer_type_start, customer_type_end, rep_name, payment_terms, customer_category,
-        chain, alternative_contact_name, alternative_contact_phone, compliance_not_required
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, invoice_frequency
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id, (name || "").trim(), contact || "", phone || "", email || "", address || "", notes || "",
       onedrive_link || "", payment_ref || "", ccEnc, account_customer ? 1 : 0,
@@ -262,7 +280,8 @@ module.exports = function createRoutes(db) {
       duration || "", milk_run_days || "", milk_run_frequency || "",
       rental_frequency || "", customer_type || "", customer_type_start || "", customer_type_end || "",
       rep_name || "", payment_terms || "", customer_category || "",
-      chain ? 1 : 0, alternative_contact_name || "", alternative_contact_phone || "", compliance_not_required ? 1 : 0
+      chain ? 1 : 0, alternative_contact_name || "", alternative_contact_phone || "", compliance_not_required ? 1 : 0,
+      invoice_frequency || ""
     );
     const abnCheck = validateABN(abn);
     logCreate(db, req, "customers", id, snapshot(db, "customers", id),
@@ -279,7 +298,7 @@ module.exports = function createRoutes(db) {
       state, accounts_contact, accounts_email, accounts_phone, compliance_number, pressure_test, abn,
       duration, milk_run_days, milk_run_frequency, rental_frequency, customer_type,
       customer_type_start, customer_type_end, rep_name, payment_terms, internal_notes, new_internal_note, customer_category,
-      chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, archived,
+      chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, archived, invoice_frequency,
     } = req.body;
     const isResidential = (customer_category || "").toLowerCase() === "residential";
     if (!isResidential && !name?.trim()) return res.status(400).json({ error: "Name is required" });
@@ -305,7 +324,7 @@ module.exports = function createRoutes(db) {
       account_customer=?, state=?, internal_notes=?, accounts_contact=?, accounts_email=?, accounts_phone=?,
       compliance_number=?, pressure_test=?, abn=?, duration=?, milk_run_days=?, milk_run_frequency=?,
       rental_frequency=?, customer_type=?, customer_type_start=?, customer_type_end=?, rep_name=?, payment_terms=?, customer_category=?,
-      chain=?, alternative_contact_name=?, alternative_contact_phone=?, compliance_not_required=?, archived=?,
+      chain=?, alternative_contact_name=?, alternative_contact_phone=?, compliance_not_required=?, archived=?, invoice_frequency=?,
       updated=datetime('now')`;
     const baseVals = [
       (name || "").trim(), contact || "", phone || "", email || "", address || "", notes || "",
@@ -316,6 +335,7 @@ module.exports = function createRoutes(db) {
       rental_frequency || "", customer_type || "", customer_type_start || "", customer_type_end || "",
       rep_name || "", payment_terms || "", customer_category || "",
       chain ? 1 : 0, alternative_contact_name || "", alternative_contact_phone || "", compliance_not_required ? 1 : 0, archived ? 1 : 0,
+      invoice_frequency || "",
     ];
 
     if (cc_number && cc_number.replace(/\D/g, "").length >= 4) {
@@ -1156,10 +1176,12 @@ module.exports = function createRoutes(db) {
       if (lineTotal > 0) {
         rentalInvoiceId = uid();
         const invoiceNumber = nextSequenceNumber(db, "invoice");
+        const overflowCust = db.prepare("SELECT payment_terms FROM customers WHERE id = ?").get(order.customer_id);
+        const overflowDueDate = calculateDueDate(order.order_date, overflowCust?.payment_terms);
         db.prepare(
-          `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date)
-           VALUES (?, ?, ?, '', '', ?, 0, 'open', ?)`
-        ).run(rentalInvoiceId, invoiceNumber, order.customer_id, lineTotal, order.order_date);
+          `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
+           VALUES (?, ?, ?, '', '', ?, 0, 'open', ?, ?)`
+        ).run(rentalInvoiceId, invoiceNumber, order.customer_id, lineTotal, order.order_date, overflowDueDate);
 
         // Mirror billCustomerRental's pattern: write a rental_invoice transaction for the audit trail.
         db.prepare(
@@ -1268,10 +1290,12 @@ module.exports = function createRoutes(db) {
       invoiceId = uid();
       const invoiceNumber = nextSequenceNumber(db, "invoice");
       const today = new Date().toISOString().split("T")[0];
+      const delivCust = db.prepare("SELECT payment_terms FROM customers WHERE id = ?").get(order.customer_id);
+      const delivDueDate = calculateDueDate(today, delivCust?.payment_terms);
       db.prepare(
-        `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date)
-         VALUES (?, ?, ?, ?, ?, ?, 0, 'open', ?)`
-      ).run(invoiceId, invoiceNumber, order.customer_id, orderId, order.po_number || "", deliveredTotal, today);
+        `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
+         VALUES (?, ?, ?, ?, ?, ?, 0, 'open', ?, ?)`
+      ).run(invoiceId, invoiceNumber, order.customer_id, orderId, order.po_number || "", deliveredTotal, today, delivDueDate);
       db.prepare("UPDATE orders SET invoice_id = ? WHERE id = ?").run(invoiceId, orderId);
     }
 
@@ -1399,12 +1423,14 @@ module.exports = function createRoutes(db) {
       // total is recomputed from delivered_qty * unit_price and status flips to 'open'.
       const invoiceId = uid();
       const invoiceNumber = nextSequenceNumber(db, "invoice");
+      const newOrderCust = db.prepare("SELECT payment_terms FROM customers WHERE id = ?").get(customer_id);
+      const newOrderDueDate = calculateDueDate(order_date, newOrderCust?.payment_terms);
       db.prepare(
-        `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date)
-         VALUES (?, ?, ?, ?, ?, ?, 0, 'pending', ?)`
+        `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
+         VALUES (?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?)`
       ).run(
         invoiceId, invoiceNumber, customer_id, orderId, po_number || "",
-        orderTotal, order_date
+        orderTotal, order_date, newOrderDueDate
       );
       db.prepare("UPDATE orders SET invoice_id = ? WHERE id = ?").run(invoiceId, orderId);
 
@@ -3383,8 +3409,8 @@ module.exports = function createRoutes(db) {
       "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
     const invStmt = db.prepare(
-      `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date)
-       VALUES (?, ?, ?, '', '', ?, 0, 'open', ?)`
+      `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
+       VALUES (?, ?, ?, '', '', ?, 0, 'open', ?, ?)`
     );
 
     let totalTx = 0;
@@ -3443,7 +3469,8 @@ module.exports = function createRoutes(db) {
           const invoiceId = nodeCrypto.randomBytes(6).toString("hex");
           const invoiceNumber = nextSequenceNumber(db, "invoice");
           const total = Math.round(lines.reduce((s, l) => s + l.line_total, 0) * 100) / 100;
-          invStmt.run(invoiceId, invoiceNumber, custId, total, date);
+          const genCust = db.prepare("SELECT payment_terms FROM customers WHERE id = ?").get(custId);
+          invStmt.run(invoiceId, invoiceNumber, custId, total, date, calculateDueDate(date, genCust?.payment_terms));
           try { autoApplyCreditsToInvoice(db, custId, invoiceId); } catch (e) { /* tolerate */ }
           recalculateCustomerBalance(db, custId);
 
@@ -4581,8 +4608,8 @@ function billCustomerRental(db, cust, mode) {
     "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, auto_generated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)"
   );
   const invStmt = db.prepare(
-    `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date)
-     VALUES (?, ?, ?, '', '', ?, 0, 'open', ?)`
+    `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
+     VALUES (?, ?, ?, '', '', ?, 0, 'open', ?, ?)`
   );
 
   // Helper to bill exactly one cycle dated billDate
@@ -4617,7 +4644,7 @@ function billCustomerRental(db, cust, mode) {
 
     const invoiceId = nodeCrypto.randomBytes(6).toString("hex");
     const invoiceNumber = nextSequenceNumber(db, "invoice");
-    invStmt.run(invoiceId, invoiceNumber, cust.id, cycleTotal, billDate);
+    invStmt.run(invoiceId, invoiceNumber, cust.id, cycleTotal, billDate, calculateDueDate(billDate, cust.payment_terms));
     invoicesCreated++;
 
     for (const line of lineDetails) {
@@ -4701,7 +4728,7 @@ function runDueRentals(db) {
   // the account_customer flag is not required. Commercial customers bill end-of-month;
   // residential customers bill when next_rental_date <= today.
   const eligible = db.prepare(`
-    SELECT id, rental_frequency, next_rental_date, customer_category
+    SELECT id, rental_frequency, next_rental_date, customer_category, payment_terms
     FROM customers
     WHERE rental_frequency IS NOT NULL AND rental_frequency != ''
       AND next_rental_date IS NOT NULL AND next_rental_date != ''
@@ -4732,8 +4759,8 @@ function runDueRentals(db) {
 // Ignores cycle, bills one cycle dated today for everyone with on-hand cylinders.
 function runRentalsForce(db, customerIds) {
   const sql = customerIds && customerIds.length > 0
-    ? `SELECT id, rental_frequency, next_rental_date, customer_category FROM customers WHERE rental_frequency IS NOT NULL AND rental_frequency != '' AND id IN (${customerIds.map(() => "?").join(",")})`
-    : `SELECT id, rental_frequency, next_rental_date, customer_category FROM customers WHERE rental_frequency IS NOT NULL AND rental_frequency != ''`;
+    ? `SELECT id, rental_frequency, next_rental_date, customer_category, payment_terms FROM customers WHERE rental_frequency IS NOT NULL AND rental_frequency != '' AND id IN (${customerIds.map(() => "?").join(",")})`
+    : `SELECT id, rental_frequency, next_rental_date, customer_category, payment_terms FROM customers WHERE rental_frequency IS NOT NULL AND rental_frequency != ''`;
   const eligible = customerIds && customerIds.length > 0
     ? db.prepare(sql).all(...customerIds)
     : db.prepare(sql).all();

@@ -819,7 +819,7 @@ const EMPTY_CUSTOMER_FORM = {
   compliance_number: "", pressure_test: "", abn: "", duration: "",
   milk_run_days: "", milk_run_frequency: "", rental_frequency: "",
   customer_type: "", customer_type_start: "", customer_type_end: "",
-  rep_name: "", payment_terms: "", new_internal_note: "", customer_category: "",
+  rep_name: "", payment_terms: "", invoice_frequency: "", new_internal_note: "", customer_category: "",
   chain: false, alternative_contact_name: "", alternative_contact_phone: "",
   compliance_not_required: false, archived: false,
 };
@@ -984,7 +984,7 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
       milk_run_days: c.milk_run_days || "", milk_run_frequency: c.milk_run_frequency || "",
       rental_frequency: c.rental_frequency || "", customer_type: c.customer_type || "",
       customer_type_start: c.customer_type_start || "", customer_type_end: c.customer_type_end || "",
-      rep_name: c.rep_name || "", payment_terms: c.payment_terms || "", new_internal_note: "",
+      rep_name: c.rep_name || "", payment_terms: c.payment_terms || "", invoice_frequency: c.invoice_frequency || "", new_internal_note: "",
       customer_category: c.customer_category || "",
       chain: !!c.chain,
       alternative_contact_name: c.alternative_contact_name || "",
@@ -1262,6 +1262,16 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
               </select>
             </div>
             <div>
+              <label style={labelStyle}>Invoice Frequency</label>
+              <select value={form.invoice_frequency} onChange={e => setForm(p => ({ ...p, invoice_frequency: e.target.value }))} style={inputStyle}>
+                <option value="">— Select —</option>
+                <option value="Weekly">Weekly</option>
+                <option value="Fortnightly">Fortnightly (Friday evening)</option>
+                <option value="Monthly">Monthly</option>
+              </select>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>Controls when PDF invoices are sent to the customer, regardless of when they are generated.</div>
+            </div>
+            <div>
               <label style={labelStyle}>Customer Type</label>
               <select value={form.customer_type} onChange={e => setForm(p => ({ ...p, customer_type: e.target.value }))} style={inputStyle}>
                 <option value="">— Select —</option>
@@ -1289,7 +1299,13 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
             )}
             <div>
               <label style={labelStyle}>Payment Terms</label>
-              <input value={form.payment_terms} onChange={e => setForm(p => ({ ...p, payment_terms: e.target.value }))} placeholder="e.g. Net 30, COD" style={inputStyle} />
+              <select value={form.payment_terms} onChange={e => setForm(p => ({ ...p, payment_terms: e.target.value }))} style={inputStyle}>
+                <option value="">— Select —</option>
+                <option value="COD">COD (due on invoice date)</option>
+                <option value="14 days">14 days</option>
+                <option value="30 days">30 days</option>
+                <option value="EOM 14 days">EOM 14 days (end of month + 14)</option>
+              </select>
             </div>
             <div>
               <label style={labelStyle}>Payment Reference</label>
@@ -1404,7 +1420,10 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
             {/* Orders & Balance panel — only on existing customers */}
             {editing !== "new" && (
               <>
-                <div style={sectionStyle}>Orders & Balance</div>
+                <div style={{ ...sectionStyle, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span>Orders & Balance</span>
+                  {onOpenOrder && <button onClick={() => onOpenOrder(null, editing)} style={{ ...btnStyle(C.green), padding: "4px 12px", fontSize: 11, fontWeight: 700, textTransform: "none", letterSpacing: 0 }}>+ New Order</button>}
+                </div>
 <div style={{ gridColumn: "1/-1" }}>
                   <label style={labelStyle}>Customer Orders ({custOrders.length})</label>
                   {custOrders.length === 0 ? (
@@ -3202,7 +3221,7 @@ function ManualCompletionPanel({ orderId, orderNumber, lines, showToast, onCompl
 
 
 // ==================== ORDERS VIEW ====================
-function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pendingOrderId, onPendingOrderHandled }) {
+function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pendingOrderId, onPendingOrderHandled, pendingNewOrderCustomerId, onPendingNewOrderHandled }) {
   const [orders, setOrders] = useState([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -3237,6 +3256,19 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
       .finally(() => { if (onPendingOrderHandled) onPendingOrderHandled(); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingOrderId]);
+
+  // Pre-populate a new order for a specific customer (from the customer form)
+  useEffect(() => {
+    if (!pendingNewOrderCustomerId) return;
+    const c = (customers || []).find(x => x.id === pendingNewOrderCustomerId);
+    if (c) {
+      setEditing(null);
+      setCreating(true);
+      selectCustomer(c);
+    }
+    if (onPendingNewOrderHandled) onPendingNewOrderHandled();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingNewOrderCustomerId]);
 
   // Load customer balance whenever the selected customer changes
   useEffect(() => {
@@ -5255,6 +5287,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
   const [pendingOrderId, setPendingOrderId] = useState(null);
+  const [pendingNewOrderCustomerId, setPendingNewOrderCustomerId] = useState(null);
   // 3.0.18: global search — results + selection for navigation
   const [globalSearchResults, setGlobalSearchResults] = useState(null);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
@@ -5348,8 +5381,8 @@ export default function App() {
   const renderView = () => {
     switch (view) {
       case "dashboard": return <DashboardView stats={stats.data} />;
-      case "orders": return <OrdersView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingOrderId={pendingOrderId} onPendingOrderHandled={() => setPendingOrderId(null)} />;
-      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId) => { setPendingOrderId(orderId); setView("orders"); }} cylinderTypes={cylinderTypes.data || []} userRole={user?.role} />;
+      case "orders": return <OrdersView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingOrderId={pendingOrderId} onPendingOrderHandled={() => setPendingOrderId(null)} pendingNewOrderCustomerId={pendingNewOrderCustomerId} onPendingNewOrderHandled={() => setPendingNewOrderCustomerId(null)} />;
+      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId, customerId) => { if (orderId) { setPendingOrderId(orderId); } else { setPendingNewOrderCustomerId(customerId); } setView("orders"); }} cylinderTypes={cylinderTypes.data || []} userRole={user?.role} />;
       case "cylindertypes": return <CylinderTypesView cylinderTypes={cylinderTypes.data} reload={cylinderTypes.reload} showToast={showToast} />;
       case "delivery": return <DeliveryView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} refreshAll={refreshAll} />;
       case "tracking": return <TrackingView customers={customers.data} cylinderTypes={cylinderTypes.data} />;
