@@ -1180,7 +1180,7 @@ module.exports = function createRoutes(db) {
   function createDeliveryTransactionsForOrder(orderId) {
     const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(orderId);
     if (!order) return 0;
-    const customer = db.prepare("SELECT rental_frequency, customer_category FROM customers WHERE id = ?").get(order.customer_id);
+    const customer = db.prepare("SELECT rental_frequency, customer_category, next_rental_date FROM customers WHERE id = ?").get(order.customer_id);
     const lines = getOrderLinesWithType(orderId);
     const insTx = db.prepare(
       `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, prepaid_until, order_line_id)
@@ -1214,6 +1214,14 @@ module.exports = function createRoutes(db) {
         `Order ${order.order_number} — ${l.cylinder_label || l.cylinder_type_id} × ${deliveredQty} (first cycle prepaid until ${prepaidUntil})`,
         orderId, prepaidUntil, l.id
       );
+      // Seed next_rental_date to the end of the prepaid period so the scheduler
+      // knows when to start billing. Only set if not already populated.
+      if (customer?.rental_frequency && (!customer.next_rental_date || customer.next_rental_date === '')) {
+        db.prepare("UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?")
+          .run(prepaidUntil, order.order_date, order.customer_id);
+        // Refresh so subsequent lines in the same order don't overwrite
+        customer.next_rental_date = prepaidUntil;
+      }
       count++;
     }
     return count;
@@ -3471,14 +3479,13 @@ module.exports = function createRoutes(db) {
     res.json({ linked: true, cap, rental_cylinder_type: linkedRental.id, rental_label: linkedRental.label });
   });
 
-  // Seed next_rental_date for account customers who have at least one rental delivery
+  // Seed next_rental_date for customers who have at least one rental delivery
   // but no next_rental_date set. Set to (most recent rental delivery date + their frequency).
   router.post("/rentals/initialize", (req, res) => {
     const custs = db.prepare(`
       SELECT c.id, c.rental_frequency
       FROM customers c
-      WHERE c.account_customer = 1
-        AND (c.next_rental_date IS NULL OR c.next_rental_date = '')
+      WHERE (c.next_rental_date IS NULL OR c.next_rental_date = '')
         AND c.rental_frequency IS NOT NULL AND c.rental_frequency != ''
     `).all();
 
@@ -4665,10 +4672,14 @@ function billCustomerRental(db, cust, mode) {
 // Scheduler entry: bill all account customers whose cycle is due today.
 // Residential = per rental_frequency, commercial = end-of-month.
 function runDueRentals(db) {
+  // Bill any customer who has a rental_frequency and next_rental_date set —
+  // the account_customer flag is not required. Commercial customers bill end-of-month;
+  // residential customers bill when next_rental_date <= today.
   const eligible = db.prepare(`
     SELECT id, rental_frequency, next_rental_date, customer_category
     FROM customers
-    WHERE account_customer = 1
+    WHERE rental_frequency IS NOT NULL AND rental_frequency != ''
+      AND next_rental_date IS NOT NULL AND next_rental_date != ''
   `).all();
 
   let customersBilled = 0;
@@ -4692,12 +4703,12 @@ function runDueRentals(db) {
   return { customersBilled, invoicesCreated, transactionsCreated, errors, ranAt: new Date().toISOString() };
 }
 
-// Manual entry: force-bill all account customers OR a specific subset.
+// Manual entry: force-bill all customers with rental_frequency set, OR a specific subset.
 // Ignores cycle, bills one cycle dated today for everyone with on-hand cylinders.
 function runRentalsForce(db, customerIds) {
   const sql = customerIds && customerIds.length > 0
-    ? `SELECT id, rental_frequency, next_rental_date, customer_category FROM customers WHERE account_customer = 1 AND id IN (${customerIds.map(() => "?").join(",")})`
-    : `SELECT id, rental_frequency, next_rental_date, customer_category FROM customers WHERE account_customer = 1`;
+    ? `SELECT id, rental_frequency, next_rental_date, customer_category FROM customers WHERE rental_frequency IS NOT NULL AND rental_frequency != '' AND id IN (${customerIds.map(() => "?").join(",")})`
+    : `SELECT id, rental_frequency, next_rental_date, customer_category FROM customers WHERE rental_frequency IS NOT NULL AND rental_frequency != ''`;
   const eligible = customerIds && customerIds.length > 0
     ? db.prepare(sql).all(...customerIds)
     : db.prepare(sql).all();
