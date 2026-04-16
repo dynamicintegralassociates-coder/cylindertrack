@@ -794,7 +794,7 @@ module.exports = function createRoutes(db) {
   // ============================================================
   router.get("/orders", (req, res) => {
     const { status, customer_id, from, to, limit } = req.query;
-    let sql = "SELECT o.*, c.name as customer_name_lookup, c.address as customer_address_lookup, c.contact as customer_contact_lookup, c.phone as customer_phone_lookup FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE 1=1";
+    let sql = "SELECT o.*, c.name as customer_name_lookup, c.address as customer_address_lookup, c.contact as customer_contact_lookup, c.phone as customer_phone_lookup, i.due_date as invoice_due_date FROM orders o LEFT JOIN customers c ON c.id = o.customer_id LEFT JOIN invoices i ON i.id = o.invoice_id WHERE 1=1";
     const params = [];
     if (status) { sql += " AND o.status = ?"; params.push(status); }
     if (customer_id) { sql += " AND o.customer_id = ?"; params.push(customer_id); }

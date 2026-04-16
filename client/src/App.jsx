@@ -3988,7 +3988,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
         <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {["Order #", "Date", "Customer", "PO#", "Order", "Total $", "Paid", "Status", "Actions"].map(h => (
+              {["Order #", "Date", "Customer", "PO#", "Order", "Total $", "Paid", "Due Date", "Status", "Actions"].map(h => (
                 <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
@@ -4004,6 +4004,9 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                 <td style={{ padding: "6px 8px", fontWeight: 700, color: C.green }}>{o.total_price ? fmtCurrency(o.total_price) : "—"}</td>
                 <td style={{ padding: "6px 8px" }}>
                   {o.paid ? <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#22c55e22", color: C.green }}>PAID</span> : <span style={{ color: C.muted }}>—</span>}
+                </td>
+                <td style={{ padding: "6px 8px", color: o.invoice_due_date ? C.text : C.muted }}>
+                  {o.invoice_due_date || "—"}
                 </td>
                 <td style={{ padding: "6px 8px" }}>
                   {(() => {
