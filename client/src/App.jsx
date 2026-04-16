@@ -5801,6 +5801,7 @@ export default function App() {
   }, [globalSearch]);
   const [emailEnabled, setEmailEnabled] = useState(false);
   const [emailConfig, setEmailConfig] = useState(null);
+  const [bizSettings, setBizSettings] = useState({ business_name: "", business_logo: "" });
 
   const customers = useApi(() => api.getCustomers());
   const cylinderTypes = useApi(() => api.getCylinderTypes());
@@ -5827,12 +5828,15 @@ export default function App() {
     }).catch(() => setAuthState("login"));
   }, []);
 
-  // Load email config once authed (so we know whether to show backend Email buttons)
+  // Load email config + business settings once authed
   useEffect(() => {
     if (authState !== "app") return;
     api.getEmailConfig()
       .then(cfg => { setEmailConfig(cfg); setEmailEnabled(!!cfg?.enabled); })
       .catch(() => { setEmailConfig(null); setEmailEnabled(false); });
+    api.getSettings()
+      .then(s => setBizSettings({ business_name: s?.business_name || "", business_logo: s?.business_logo || "" }))
+      .catch(() => {});
   }, [authState]);
 
   const logout = async () => {
@@ -5890,13 +5894,23 @@ export default function App() {
     <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: C.bg, color: C.text }}>
       {/* SIDEBAR */}
       <nav style={{ width: 240, background: C.panel, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ padding: "24px 20px 20px", borderBottom: `1px solid ${C.border}` }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #f59e0b, #ef4444)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#fff" }}>CT</div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.02em" }}>CylinderTrack</div>
-              <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>Gas Rental Manager</div>
+        <div style={{ padding: "16px 16px 14px", borderBottom: `1px solid ${C.border}` }}>
+          {bizSettings.business_logo ? (
+            <img
+              src={bizSettings.business_logo}
+              alt="logo"
+              style={{ maxHeight: 48, maxWidth: 180, objectFit: "contain", display: "block", marginBottom: 6 }}
+            />
+          ) : (
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #f59e0b, #ef4444)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#fff", marginBottom: 6 }}>CT</div>
+          )}
+          {bizSettings.business_name && (
+            <div style={{ fontWeight: 700, fontSize: 14, color: C.text, letterSpacing: "-0.01em", lineHeight: 1.2, marginBottom: 4 }}>
+              {bizSettings.business_name}
             </div>
+          )}
+          <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.02em" }}>
+            Powered by <span style={{ color: C.accent, fontWeight: 700 }}>CorvexTrack™</span> by Corvexity
           </div>
         </div>
 
