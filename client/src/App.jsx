@@ -3561,10 +3561,17 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
     editingDetailRef.current = ""; // 3.0.12
   };
 
-  const deleteOrder = async (id) => {
-    if (!confirm("Delete this order?")) return;
-    try { await api.deleteOrder(id); loadOrders(); showToast("Order deleted"); }
-    catch (e) { showToast(e.message, "error"); }
+  const cancelOrder = async (id) => {
+    if (!confirm("Cancel this order? This cannot be undone.")) return;
+    try {
+      const result = await api.cancelOrder(id);
+      loadOrders();
+      if (result.creditAmount > 0) {
+        showToast(`Order cancelled — credit note ${result.creditNumber} ($${result.creditAmount.toFixed(2)}) applied to account`);
+      } else {
+        showToast("Order cancelled");
+      }
+    } catch (e) { showToast(e.message, "error"); }
   };
 
   const confirmPayment = async (id) => {
@@ -3988,7 +3995,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
           </thead>
           <tbody>
             {filteredOrders.map(o => (
-              <tr key={o.id} style={{ borderBottom: `1px solid ${C.border}`, background: editing === o.id ? "#f59e0b08" : "transparent" }}>
+              <tr key={o.id} style={{ borderBottom: `1px solid ${C.border}`, background: editing === o.id ? "#f59e0b08" : "transparent", opacity: o.status === "cancelled" ? 0.5 : 1 }}>
                 <td style={{ padding: "6px 8px", color: C.accent, fontWeight: 600 }}>{o.order_number || "—"}</td>
                 <td style={{ padding: "6px 8px" }}>{o.order_date}</td>
                 <td style={{ padding: "6px 8px", fontWeight: 600 }}>{o.customer_name || o.customer_name_lookup || o.address || "—"}</td>
@@ -4019,7 +4026,9 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                       {o.collection ? "Fulfil" : (o.status === "awaiting_dispatch" ? "Push to Optimo" : "Confirm & Push")}
                     </button>
                   )}
-                  <button onClick={() => deleteOrder(o.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>Del</button>
+                  {o.status !== "cancelled" && (
+                    <button onClick={() => cancelOrder(o.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>Cancel</button>
+                  )}
                 </td>
               </tr>
             ))}

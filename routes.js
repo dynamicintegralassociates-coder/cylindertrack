@@ -1869,6 +1869,65 @@ module.exports = function createRoutes(db) {
     res.json({ success: true });
   });
 
+  // Cancel an order — marks it cancelled, voids any linked invoice, and if the invoice
+  // was already paid creates an auto-approved credit note for the customer.
+  router.post("/orders/:id/cancel", (req, res) => {
+    const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.id);
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (order.status === "cancelled") return res.json({ success: true, alreadyCancelled: true });
+
+    const invoice = order.invoice_id
+      ? db.prepare("SELECT * FROM invoices WHERE id = ?").get(order.invoice_id)
+      : null;
+
+    // A credit is owed only when the customer has already paid the linked invoice.
+    const needsCredit = invoice && invoice.status === "paid" && invoice.total > 0;
+
+    let creditId = null;
+    let creditNumber = null;
+
+    db.transaction(() => {
+      // Mark order cancelled
+      db.prepare("UPDATE orders SET status = 'cancelled', updated = datetime('now') WHERE id = ?").run(order.id);
+
+      if (invoice && invoice.status !== "void") {
+        db.prepare("UPDATE invoices SET status = 'void', updated = datetime('now') WHERE id = ?").run(invoice.id);
+      }
+
+      if (needsCredit) {
+        creditId = uid();
+        creditNumber = nextSequenceNumber(db, "credit");
+        const reason = `Order ${order.order_number || order.id} cancelled — refund for paid invoice ${invoice.invoice_number || invoice.id}`;
+        const createdBy = req.user?.username || req.user?.id || "";
+        const today = new Date().toISOString().split("T")[0];
+
+        db.prepare(
+          `INSERT INTO credit_notes (id, credit_number, customer_id, amount, remaining_amount, reason, status, created_by, approved_by, approved_date)
+           VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?)`
+        ).run(creditId, creditNumber, order.customer_id, invoice.total, invoice.total, reason, createdBy, createdBy, today);
+
+        // Auto-apply against oldest open invoices FIFO
+        const openInvoices = db.prepare(
+          "SELECT id FROM invoices WHERE customer_id = ? AND status = 'open' ORDER BY invoice_date ASC"
+        ).all(order.customer_id);
+        for (const inv of openInvoices) {
+          const before = db.prepare("SELECT remaining_amount FROM credit_notes WHERE id = ?").get(creditId);
+          if (!before || before.remaining_amount <= 0) break;
+          autoApplyCreditsToInvoice(db, order.customer_id, inv.id);
+        }
+      }
+
+      recalculateCustomerBalance(db, order.customer_id);
+    })();
+
+    try {
+      logUpdate(db, req, "orders", order.id, order, snapshot(db, "orders", order.id),
+        `Cancelled order ${order.order_number || order.id}${invoice ? ` (voided invoice ${invoice.invoice_number || invoice.id})` : ""}${creditNumber ? ` (credit note ${creditNumber} created)` : ""}`);
+    } catch (e) { /* audit must not break response */ }
+
+    res.json({ success: true, creditId, creditNumber, creditAmount: needsCredit ? invoice.total : 0 });
+  });
+
   // Confirm payment → push order to OptimoRoute (if applicable) + create delivery transactions
   // RULES:
   // - If order.collection = 1, do NOT push to OptimoRoute (manual fulfillment)

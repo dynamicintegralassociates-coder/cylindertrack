@@ -101,6 +101,7 @@ const api = {
   createOrder: (data) => request("/orders", { method: "POST", body: JSON.stringify(data) }),
   updateOrder: (id, data) => request(`/orders/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteOrder: (id) => request(`/orders/${id}`, { method: "DELETE" }),
+  cancelOrder: (id) => request(`/orders/${id}/cancel`, { method: "POST" }),
   confirmPayment: (id) => request(`/orders/${id}/confirm-payment`, { method: "POST" }),
   resendOrder: (id) => request(`/orders/${id}/resend`, { method: "POST" }),
   matchCreditToOrder: (id) => request(`/orders/${id}/match-credit`, { method: "POST" }),
