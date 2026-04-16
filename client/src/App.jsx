@@ -957,7 +957,7 @@ function parseCSV(text) {
   return { headers, rows };
 }
 
-function CustomersView({ customers, reload, showToast, onOpenOrder }) {
+function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderTypes, userRole }) {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY_CUSTOMER_FORM);
   const [search, setSearch] = useState("");
@@ -1039,23 +1039,35 @@ function CustomersView({ customers, reload, showToast, onOpenOrder }) {
   const editingCust = editing && editing !== "new" ? (customers || []).find(c => c.id === editing) : null;
   const existingNotes = parseInternalNotes(editingCust?.internal_notes);
 
-  // Load this customer's orders + balance + last sale price whenever the edit panel opens
+  // Load this customer's orders + balance + last sale price + price list whenever the edit panel opens
   const [custOrders, setCustOrders] = useState([]);
   const [custBalance, setCustBalance] = useState(null);
   const [lastSalePrice, setLastSalePrice] = useState(null);
+  const [custPriceList, setCustPriceList] = useState([]);
   useEffect(() => {
     if (editing && editing !== "new") {
       let cancelled = false;
       api.getCustomerOrders(editing).then(o => { if (!cancelled) setCustOrders(o || []); }).catch(() => { if (!cancelled) setCustOrders([]); });
       api.getCustomerBalance(editing).then(b => { if (!cancelled) setCustBalance(b); }).catch(() => { if (!cancelled) setCustBalance(null); });
       api.getLastSalePrice(editing).then(p => { if (!cancelled) setLastSalePrice(p); }).catch(() => { if (!cancelled) setLastSalePrice(null); });
+      api.getCustomerPriceList(editing).then(p => { if (!cancelled) setCustPriceList(p || []); }).catch(() => { if (!cancelled) setCustPriceList([]); });
       return () => { cancelled = true; };
     } else {
       setCustOrders([]);
       setCustBalance(null);
       setLastSalePrice(null);
+      setCustPriceList([]);
     }
   }, [editing]);
+
+  const saveCustPrice = async (ct_id, price, fixed_price, fixed_from, fixed_to) => {
+    try {
+      await api.setPrice(editing, ct_id, { price, fixed_price, fixed_from, fixed_to });
+      const updated = await api.getCustomerPriceList(editing);
+      setCustPriceList(updated || []);
+      showToast("Price saved");
+    } catch (e) { showToast(e.message, "error"); }
+  };
 
   const toggleMilkDay = (dayKey) => {
     const set = new Set((form.milk_run_days || "").split(",").filter(Boolean));
@@ -1408,6 +1420,33 @@ function CustomersView({ customers, reload, showToast, onOpenOrder }) {
               </>
             )}
           </div>
+          {editing !== "new" && custPriceList.length > 0 && (
+            <div style={{ gridColumn: "1/-1", marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
+                Customer Pricing
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      {["Item", "Type", "Default $", "Customer $", "Fixed", "Fixed From", "Fixed To", ""].map(h => (
+                        <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {custPriceList.map(cp => (
+                      <CustPriceRow key={cp.cylinder_type} cp={cp} onSave={saveCustPrice} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                Prices highlighted in <span style={{ color: C.accent }}>amber</span> are custom for this customer. Leave at default to use the standard price.
+              </div>
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
             <button onClick={save} style={btnStyle(C.green)}>Save</button>
             <button onClick={() => setEditing(null)} style={btnStyle(C.muted)}>Cancel</button>
@@ -5187,7 +5226,7 @@ export default function App() {
     switch (view) {
       case "dashboard": return <DashboardView stats={stats.data} />;
       case "orders": return <OrdersView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingOrderId={pendingOrderId} onPendingOrderHandled={() => setPendingOrderId(null)} />;
-      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId) => { setPendingOrderId(orderId); setView("orders"); }} />;
+      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId) => { setPendingOrderId(orderId); setView("orders"); }} cylinderTypes={cylinderTypes.data || []} userRole={user?.role} />;
       case "cylindertypes": return <CylinderTypesView cylinderTypes={cylinderTypes.data} reload={cylinderTypes.reload} showToast={showToast} />;
       case "delivery": return <DeliveryView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} refreshAll={refreshAll} />;
       case "tracking": return <TrackingView customers={customers.data} cylinderTypes={cylinderTypes.data} />;
