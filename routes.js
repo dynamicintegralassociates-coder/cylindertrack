@@ -3480,7 +3480,9 @@ module.exports = function createRoutes(db) {
   });
 
   // Seed next_rental_date for customers who have at least one rental delivery
-  // but no next_rental_date set. Set to (most recent rental delivery date + their frequency).
+  // but no next_rental_date set.
+  // Uses the latest prepaid_until on their rental deliveries if present (correct for
+  // order-generated deliveries), otherwise falls back to lastDelivery.d + frequency.
   router.post("/rentals/initialize", (req, res) => {
     const custs = db.prepare(`
       SELECT c.id, c.rental_frequency
@@ -3492,15 +3494,32 @@ module.exports = function createRoutes(db) {
     let seeded = 0;
     db.transaction(() => {
       for (const c of custs) {
+        // Prefer the latest prepaid_until (set by the order flow for the first cycle)
+        // so we don't back-bill a period that was already pre-paid on the delivery order.
+        const latestPrepaid = db.prepare(`
+          SELECT MAX(t.prepaid_until) as p, MAX(t.date) as d
+          FROM transactions t
+          JOIN cylinder_types ct ON ct.id = t.cylinder_type
+          WHERE t.customer_id = ? AND t.type = 'delivery' AND ct.item_type = 'cylinder'
+            AND t.prepaid_until IS NOT NULL AND t.prepaid_until != '' AND t.prepaid_until != '9999-12-31'
+        `).get(c.id);
+
         const lastDelivery = db.prepare(`
           SELECT MAX(t.date) as d
           FROM transactions t
           JOIN cylinder_types ct ON ct.id = t.cylinder_type
           WHERE t.customer_id = ? AND t.type = 'delivery' AND ct.item_type = 'cylinder'
         `).get(c.id);
+
         if (!lastDelivery?.d) continue;
-        const next = addFrequency(lastDelivery.d, c.rental_frequency);
-        db.prepare("UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?").run(next, lastDelivery.d, c.id);
+
+        // Use prepaid_until as next billing date if available; otherwise derive from last delivery
+        const next = (latestPrepaid?.p && latestPrepaid.p > lastDelivery.d)
+          ? latestPrepaid.p
+          : addFrequency(lastDelivery.d, c.rental_frequency);
+
+        db.prepare("UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?")
+          .run(next, lastDelivery.d, c.id);
         seeded++;
       }
     })();
