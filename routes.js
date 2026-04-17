@@ -3,6 +3,7 @@ const nodeCrypto = require("crypto");
 const { OptimoRouteClient } = require("./optimoroute");
 const { encrypt, decrypt, maskCard } = require("./crypto");
 const emailModule = require("./email");
+const { generateStatementData, generateStatementPdf } = require("./statement");
 const { parseCylinderFromText } = require("./parser"); // 3.0.18: extracted for unit testing
 const { logAudit, logCreate, logUpdate, logDelete, snapshot } = require("./audit");
 const { exportFullBackup, restoreFullBackup, validateBackup, BACKUP_TABLES } = require("./backup");
@@ -52,14 +53,82 @@ function nextSequenceNumber(db, kind /* "customer" | "order" */) {
 function addFrequency(dateStr, frequency) {
   const d = new Date(dateStr + "T00:00:00Z");
   switch ((frequency || "").toLowerCase()) {
-    case "daily":     d.setUTCDate(d.getUTCDate() + 1); break;
-    case "weekly":    d.setUTCDate(d.getUTCDate() + 7); break;
-    case "monthly":   d.setUTCMonth(d.getUTCMonth() + 1); break;
-    case "quarterly": d.setUTCMonth(d.getUTCMonth() + 3); break;
-    case "annually":  d.setUTCFullYear(d.getUTCFullYear() + 1); break;
-    default:          d.setUTCMonth(d.getUTCMonth() + 1); // safe fallback
+    case "daily":       d.setUTCDate(d.getUTCDate() + 1); break;
+    case "weekly":      d.setUTCDate(d.getUTCDate() + 7); break;
+    case "fortnightly": d.setUTCDate(d.getUTCDate() + 14); break;
+    case "monthly":     d.setUTCMonth(d.getUTCMonth() + 1); break;
+    case "quarterly":   d.setUTCMonth(d.getUTCMonth() + 3); break;
+    case "annually":    d.setUTCFullYear(d.getUTCFullYear() + 1); break;
+    default:            d.setUTCMonth(d.getUTCMonth() + 1); // safe fallback
   }
   return d.toISOString().split("T")[0];
+}
+
+// Get next occurrence of a specific day of week (0=Sun,1=Mon,...,6=Sat) strictly after dateStr
+function nextDayOfWeek(dateStr, dayOfWeek) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  const current = d.getUTCDay();
+  const diff = ((dayOfWeek - current + 7) % 7) || 7; // always at least 1 day forward
+  d.setUTCDate(d.getUTCDate() + diff);
+  return d.toISOString().split("T")[0];
+}
+
+// Day-of-week and day-of-month aware version used for billing date advances.
+// settings: { billing_weekly_day: "5", billing_monthly_day: "last"|"1".."28" }
+// Falls back to addFrequency behaviour if settings not provided.
+function addBillingFrequency(dateStr, frequency, settings) {
+  const freq = (frequency || "").toLowerCase();
+  const wday = parseInt(settings?.billing_weekly_day ?? "5", 10); // default Friday
+  const mday = (settings?.billing_monthly_day ?? "last").toString().toLowerCase().trim();
+
+  switch (freq) {
+    case "daily":
+      return addFrequency(dateStr, "daily");
+
+    case "weekly":
+      return nextDayOfWeek(dateStr, wday);
+
+    case "fortnightly": {
+      // Skip one full week forward first, then find the configured day of week.
+      const d = new Date(dateStr + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() + 7);
+      return nextDayOfWeek(d.toISOString().split("T")[0], wday);
+    }
+
+    case "monthly": {
+      const d = new Date(dateStr + "T00:00:00Z");
+      d.setUTCMonth(d.getUTCMonth() + 1);
+      if (mday === "last") {
+        d.setUTCDate(1);
+        d.setUTCMonth(d.getUTCMonth() + 1);
+        d.setUTCDate(0); // Day 0 of next month = last day of current month
+      } else {
+        const day = Math.max(1, Math.min(28, parseInt(mday, 10)));
+        d.setUTCDate(day);
+      }
+      return d.toISOString().split("T")[0];
+    }
+
+    case "quarterly": {
+      const d = new Date(dateStr + "T00:00:00Z");
+      d.setUTCMonth(d.getUTCMonth() + 3);
+      if (mday === "last") {
+        d.setUTCDate(1);
+        d.setUTCMonth(d.getUTCMonth() + 1);
+        d.setUTCDate(0);
+      } else {
+        const day = Math.max(1, Math.min(28, parseInt(mday, 10)));
+        d.setUTCDate(day);
+      }
+      return d.toISOString().split("T")[0];
+    }
+
+    case "annually":
+      return addFrequency(dateStr, "annually");
+
+    default:
+      return addFrequency(dateStr, frequency);
+  }
 }
 
 // Read a setting value with a default fallback
@@ -70,6 +139,14 @@ function getSetting(db, key, defaultValue) {
   } catch (e) {
     return defaultValue;
   }
+}
+
+// Load billing schedule settings from DB (used by addBillingFrequency).
+function getBillingSettings(db) {
+  return {
+    billing_weekly_day: getSetting(db, "billing_weekly_day", "5"),   // Friday
+    billing_monthly_day: getSetting(db, "billing_monthly_day", "last"),
+  };
 }
 
 // Current on-hand count of a specific rental cylinder type for a customer.
@@ -256,6 +333,7 @@ module.exports = function createRoutes(db) {
       duration, milk_run_days, milk_run_frequency, rental_frequency, customer_type,
       customer_type_start, customer_type_end, rep_name, payment_terms, internal_notes, customer_category,
       chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, invoice_frequency,
+      next_invoice_date, next_rental_date,
     } = req.body;
     // For non-residential customers, name is required.
     // For residential customers, name OR address is required (can't both be blank).
@@ -272,8 +350,9 @@ module.exports = function createRoutes(db) {
         account_number, state, internal_notes, accounts_contact, accounts_email, accounts_phone,
         compliance_number, pressure_test, abn, duration, milk_run_days, milk_run_frequency,
         rental_frequency, customer_type, customer_type_start, customer_type_end, rep_name, payment_terms, customer_category,
-        chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, invoice_frequency
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, invoice_frequency,
+        next_invoice_date, next_rental_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id, (name || "").trim(), contact || "", phone || "", email || "", address || "", notes || "",
       onedrive_link || "", payment_ref || "", ccEnc, account_customer ? 1 : 0,
@@ -283,7 +362,8 @@ module.exports = function createRoutes(db) {
       rental_frequency || "", customer_type || "", customer_type_start || "", customer_type_end || "",
       rep_name || "", payment_terms || "", customer_category || "",
       chain ? 1 : 0, alternative_contact_name || "", alternative_contact_phone || "", compliance_not_required ? 1 : 0,
-      invoice_frequency || ""
+      invoice_frequency || "",
+      next_invoice_date || null, next_rental_date || null
     );
     const abnCheck = validateABN(abn);
     logCreate(db, req, "customers", id, snapshot(db, "customers", id),
@@ -301,6 +381,7 @@ module.exports = function createRoutes(db) {
       duration, milk_run_days, milk_run_frequency, rental_frequency, customer_type,
       customer_type_start, customer_type_end, rep_name, payment_terms, internal_notes, new_internal_note, customer_category,
       chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, archived, invoice_frequency,
+      next_invoice_date, next_rental_date,
     } = req.body;
     const isResidential = (customer_category || "").toLowerCase() === "residential";
     if (!isResidential && !name?.trim()) return res.status(400).json({ error: "Name is required" });
@@ -327,6 +408,7 @@ module.exports = function createRoutes(db) {
       compliance_number=?, pressure_test=?, abn=?, duration=?, milk_run_days=?, milk_run_frequency=?,
       rental_frequency=?, customer_type=?, customer_type_start=?, customer_type_end=?, rep_name=?, payment_terms=?, customer_category=?,
       chain=?, alternative_contact_name=?, alternative_contact_phone=?, compliance_not_required=?, archived=?, invoice_frequency=?,
+      next_invoice_date=?, next_rental_date=?,
       updated=datetime('now')`;
     const baseVals = [
       (name || "").trim(), contact || "", phone || "", email || "", address || "", notes || "",
@@ -338,6 +420,7 @@ module.exports = function createRoutes(db) {
       rep_name || "", payment_terms || "", customer_category || "",
       chain ? 1 : 0, alternative_contact_name || "", alternative_contact_phone || "", compliance_not_required ? 1 : 0, archived ? 1 : 0,
       invoice_frequency || "",
+      next_invoice_date || null, next_rental_date || null,
     ];
 
     if (cc_number && cc_number.replace(/\D/g, "").length >= 4) {
@@ -377,10 +460,54 @@ module.exports = function createRoutes(db) {
   });
 
   // Get a customer's orders only (for the customer edit panel)
+  // Includes aggregated delivered_qty and returned_qty from order_lines / transactions,
+  // plus invoice_number / invoice_status from the linked invoice (if any).
   router.get("/customers/:id/orders", (req, res) => {
-    const rows = db.prepare(
-      "SELECT * FROM orders WHERE customer_id = ? ORDER BY order_date DESC, created DESC"
-    ).all(req.params.id);
+    const rows = db.prepare(`
+      SELECT o.*,
+        i.invoice_number AS invoice_number,
+        i.status AS invoice_status,
+        COALESCE((
+          SELECT SUM(ol.delivered_qty)
+          FROM order_lines ol
+          JOIN cylinder_types ct ON ct.id = ol.cylinder_type_id
+          WHERE ol.order_id = o.id AND ct.item_type = 'sale'
+        ), 0) AS total_delivered,
+        COALESCE((
+          SELECT SUM(t.qty) FROM transactions t
+          JOIN order_lines ol ON ol.id = t.order_line_id
+          JOIN cylinder_types ct ON ct.id = ol.cylinder_type_id
+          WHERE ol.order_id = o.id AND t.type = 'return' AND ct.item_type = 'sale'
+        ), 0) AS total_returned
+      FROM orders o
+      LEFT JOIN invoices i ON i.id = o.invoice_id
+      WHERE o.customer_id = ?
+      ORDER BY o.order_date DESC, o.created DESC
+    `).all(req.params.id);
+    res.json(rows);
+  });
+
+  // Current cylinders on hand for a single customer (for the customer edit panel)
+  router.get("/customers/:id/on-hand", (req, res) => {
+    // Physical cylinder tracking is stored against item_type='cylinder' types (via
+    // processLinkedRentalOnDelivery). Where a cylinder type is linked to a sale type
+    // (linked_sale_item_id set), show the sale type's label so the user sees "45 kg"
+    // instead of "45 rental". Falls back to the cylinder type's own label when not linked.
+    const rows = db.prepare(`
+      SELECT
+        COALESCE(NULLIF(sale_ct.id, ''), ct.id) AS cylinder_type,
+        COALESCE(NULLIF(sale_ct.label, ''), ct.label) AS cylinder_label,
+        SUM(CASE WHEN t.type='delivery' THEN t.qty ELSE 0 END) -
+        SUM(CASE WHEN t.type='return' THEN t.qty ELSE 0 END) AS on_hand
+      FROM transactions t
+      JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      LEFT JOIN cylinder_types sale_ct ON sale_ct.id = ct.linked_sale_item_id
+        AND sale_ct.item_type = 'sale'
+      WHERE t.customer_id = ? AND ct.item_type = 'cylinder'
+      GROUP BY COALESCE(NULLIF(sale_ct.id, ''), ct.id)
+      HAVING on_hand != 0
+      ORDER BY COALESCE(NULLIF(sale_ct.label, ''), ct.label)
+    `).all(req.params.id);
     res.json(rows);
   });
 
@@ -761,7 +888,7 @@ module.exports = function createRoutes(db) {
       if (type === "delivery" && ct.item_type === "cylinder") {
         const cust = db.prepare("SELECT next_rental_date, rental_frequency FROM customers WHERE id = ?").get(customer_id);
         if (cust && !cust.next_rental_date && cust.rental_frequency) {
-          const next = addFrequency(date, cust.rental_frequency);
+          const next = addBillingFrequency(date, cust.rental_frequency, getBillingSettings(db));
           db.prepare("UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?").run(next, date, customer_id);
           out.auto_rental_seeded = true;
         }
@@ -804,7 +931,7 @@ module.exports = function createRoutes(db) {
   // ============================================================
   router.get("/orders", (req, res) => {
     const { status, customer_id, from, to, limit } = req.query;
-    let sql = "SELECT o.*, c.name as customer_name_lookup, c.address as customer_address_lookup, c.contact as customer_contact_lookup, c.phone as customer_phone_lookup, i.due_date as invoice_due_date FROM orders o LEFT JOIN customers c ON c.id = o.customer_id LEFT JOIN invoices i ON i.id = o.invoice_id WHERE 1=1";
+    let sql = "SELECT o.*, c.name as customer_name_lookup, c.address as customer_address_lookup, c.contact as customer_contact_lookup, c.phone as customer_phone_lookup, i.due_date as invoice_due_date, i.invoice_number as invoice_number, i.status as invoice_status FROM orders o LEFT JOIN customers c ON c.id = o.customer_id LEFT JOIN invoices i ON i.id = o.invoice_id WHERE 1=1";
     const params = [];
     if (status) { sql += " AND o.status = ?"; params.push(status); }
     if (customer_id) { sql += " AND o.customer_id = ?"; params.push(customer_id); }
@@ -1446,11 +1573,11 @@ module.exports = function createRoutes(db) {
       const vals = [];
       if (!cust.next_rental_date && cust.rental_frequency) {
         updates.push("next_rental_date = ?");
-        vals.push(addFrequency(baseDate, cust.rental_frequency));
+        vals.push(addBillingFrequency(baseDate, cust.rental_frequency, getBillingSettings(db)));
       }
       if (!cust.next_invoice_date && cust.invoice_frequency) {
         updates.push("next_invoice_date = ?");
-        vals.push(addFrequency(baseDate, cust.invoice_frequency));
+        vals.push(addBillingFrequency(baseDate, cust.invoice_frequency, getBillingSettings(db)));
       }
       if (updates.length > 0) {
         db.prepare(`UPDATE customers SET ${updates.join(", ")} WHERE id = ?`).run(...vals, cust.id);
@@ -1558,24 +1685,35 @@ module.exports = function createRoutes(db) {
         insLine.run(uid(), orderId, l.cylinder_type_id, l.qty, l.unit_price, l.line_total, l.sort_order);
       }
 
+      // Commercial account customers (category='commercial' AND account_customer=1) are billed
+      // on a periodic consolidated invoice by the billing scheduler (billCommercialAccount).
+      // Do NOT create a per-order invoice for them — leave invoice_id null and let the billing
+      // cycle collect all delivered orders into one invoice at the configured frequency.
+      const isCommercialAccount = (customer?.customer_category || "").toLowerCase() === "commercial" && customer?.account_customer;
+
       // Round 3 invoice rule: invoice is created in 'pending' state — it doesn't count
       // toward customer balance until the order is delivered. At delivery, the invoice's
       // total is recomputed from delivered_qty * unit_price and status flips to 'open'.
-      const invoiceId = uid();
-      const invoiceNumber = nextSequenceNumber(db, "invoice");
-      const newOrderCust = db.prepare("SELECT payment_terms FROM customers WHERE id = ?").get(customer_id);
-      const newOrderDueDate = calculateDueDate(order_date, newOrderCust?.payment_terms);
-      db.prepare(
-        `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
-         VALUES (?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?)`
-      ).run(
-        invoiceId, invoiceNumber, customer_id, orderId, po_number || "",
-        orderTotal, order_date, newOrderDueDate
-      );
-      db.prepare("UPDATE orders SET invoice_id = ? WHERE id = ?").run(invoiceId, orderId);
+      let invoiceId = null;
+      let invoiceNumber = null;
+      if (!isCommercialAccount) {
+        invoiceId = uid();
+        invoiceNumber = nextSequenceNumber(db, "invoice");
+        const newOrderCust = db.prepare("SELECT payment_terms FROM customers WHERE id = ?").get(customer_id);
+        const newOrderDueDate = calculateDueDate(order_date, newOrderCust?.payment_terms);
+        db.prepare(
+          `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
+           VALUES (?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?)`
+        ).run(
+          invoiceId, invoiceNumber, customer_id, orderId, po_number || "",
+          orderTotal, order_date, newOrderDueDate
+        );
+        db.prepare("UPDATE orders SET invoice_id = ? WHERE id = ?").run(invoiceId, orderId);
+      }
 
-      // Apply payments to the pending invoice (a "deposit" or "prepayment")
-      if (paid && orderTotal > 0) {
+      // Apply payments to the pending invoice (a "deposit" or "prepayment").
+      // Only applies to non-commercial accounts that have an invoice created above.
+      if (invoiceId && paid && orderTotal > 0) {
         db.prepare(
           "INSERT INTO payments (id, customer_id, invoice_id, amount, method, reference, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         ).run(
@@ -1585,7 +1723,7 @@ module.exports = function createRoutes(db) {
         );
         db.prepare("UPDATE invoices SET amount_paid = ?, updated = datetime('now') WHERE id = ?")
           .run(orderTotal, invoiceId);
-      } else if (partialPayment > 0 && orderTotal > 0) {
+      } else if (invoiceId && partialPayment > 0 && orderTotal > 0) {
         const applied = Math.min(partialPayment, orderTotal);
         db.prepare(
           "INSERT INTO payments (id, customer_id, invoice_id, amount, method, reference, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
@@ -2855,7 +2993,6 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
         return res.status(400).json({ error: errors.join("; ") });
       }
 
-      const customer = db.prepare("SELECT rental_frequency, customer_category FROM customers WHERE id = ?").get(order.customer_id);
       const baseNotePrefix = `Manual batch completion via failsafe — ORD ${order.order_number}` +
         (notes ? ` | ${notes}` : "");
 
@@ -2880,13 +3017,15 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
           let hadReturnOther = false;
 
           // Write one transaction per completion entry.
-          // IMPORTANT: Only cylinder-type lines get raw delivery/return transactions here.
-          // Sale-type lines must NOT get transactions at this stage — their linked rental
-          // overflow is handled after the loop by processLinkedRentalOnDelivery (per-line)
-          // and by createDeliveryTransactionsForOrder (aggregate, via tryAutoTransitionToDelivered).
-          // Pre-inserting delivery/return txs for sale lines would poison the idempotency
-          // checks (delExists / retExists keyed by order_line_id) and cause no rental invoice
-          // to be generated.
+          // For cylinder-type lines: direct delivery/return/return_other transactions.
+          // For sale-type lines: transactions are recorded against the linked rental cylinder
+          // type (so on-hand tracking is updated). The linked rental type is found via
+          // findLinkedRentalCylinder. We record exactly what was entered (actual qty, not
+          // overflow), then call processLinkedRentalOnDelivery after for rental invoice logic.
+          const linkedRentalForLine = line.item_type === "sale"
+            ? findLinkedRentalCylinder(line.cylinder_type_id)
+            : null;
+
           for (const r of lineCompletions) {
             const { action, qty, foreign_owner } = r;
             if (action === "delivered") {
@@ -2900,6 +3039,20 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
                   uid(), order.customer_id, line.cylinder_type_id, qty, order.order_date,
                   `${baseNote} | Del:${qty}`, line.id
                 );
+              } else if (line.item_type === "sale" && linkedRentalForLine) {
+                // Record delivery against linked rental type. Idempotent per order_line_id.
+                const exists = db.prepare(
+                  "SELECT 1 FROM transactions WHERE order_line_id = ? AND type = 'delivery' LIMIT 1"
+                ).get(line.id);
+                if (!exists) {
+                  db.prepare(
+                    `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id)
+                     VALUES (?, ?, ?, 'delivery', ?, ?, ?, 'manual', '', ?)`
+                  ).run(
+                    uid(), order.customer_id, linkedRentalForLine.id, qty, order.order_date,
+                    `${baseNote} | Del:${qty}`, line.id
+                  );
+                }
               }
             } else if (action === "returned") {
               hadReturn = true;
@@ -2911,6 +3064,19 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
                   uid(), order.customer_id, line.cylinder_type_id, qty, order.order_date,
                   `${baseNote} | Ret:${qty}`, line.id
                 );
+              } else if (line.item_type === "sale" && linkedRentalForLine) {
+                const exists = db.prepare(
+                  "SELECT 1 FROM transactions WHERE order_line_id = ? AND type = 'return' LIMIT 1"
+                ).get(line.id);
+                if (!exists) {
+                  db.prepare(
+                    `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id)
+                     VALUES (?, ?, ?, 'return', ?, ?, ?, 'manual', '', ?)`
+                  ).run(
+                    uid(), order.customer_id, linkedRentalForLine.id, qty, order.order_date,
+                    `${baseNote} | Ret:${qty}`, line.id
+                  );
+                }
               }
             } else if (action === "returned_other") {
               hadReturnOther = true;
@@ -2923,6 +3089,20 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
                   `${baseNote} | Roth:${qty} from ${foreign_owner}`,
                   line.id, foreign_owner
                 );
+              } else if (line.item_type === "sale" && linkedRentalForLine) {
+                const exists = db.prepare(
+                  "SELECT 1 FROM transactions WHERE order_line_id = ? AND type = 'return_other' LIMIT 1"
+                ).get(line.id);
+                if (!exists) {
+                  db.prepare(
+                    `INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, optimoroute_order, order_line_id, foreign_owner)
+                     VALUES (?, ?, ?, 'return_other', ?, ?, ?, 'manual', '', ?, ?)`
+                  ).run(
+                    uid(), order.customer_id, linkedRentalForLine.id, qty, order.order_date,
+                    `${baseNote} | Roth:${qty} from ${foreign_owner}`,
+                    line.id, foreign_owner
+                  );
+                }
               }
             }
           }
@@ -2944,13 +3124,10 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
             "UPDATE order_lines SET delivered_qty = ?, status = ? WHERE id = ?"
           ).run(finalDeliveredQty, finalStatus, line.id);
 
-          // 3.0.18: process linked rental for sale-type lines that ended in delivered.
-          // Net delivered (totalDelivered) is what physically went out; any 'returned' actions
-          // on the same line are already in transactions and will reduce on-hand naturally,
-          // so processLinkedRentalOnDelivery's getOnHand call will see the right number.
-          if (line.item_type === "sale" && hadDelivery && totalDelivered > 0) {
-            processLinkedRentalOnDelivery(order, customer, line, totalDelivered);
-          }
+          // processLinkedRentalOnDelivery is intentionally skipped here — the delivery
+          // transaction was already inserted above (directly against the linked rental type),
+          // so its idempotency check would be a no-op. Rental invoice generation for new
+          // cylinder overflow (residential customers) is deferred to the normal billing flow.
         }
 
         // 3.0.17: After completing all sale lines via the failsafe, auto-flip every
@@ -3654,13 +3831,89 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
   // ============================================================
   router.get("/customers/:id/balance", (req, res) => {
     const bal = recalculateCustomerBalance(db, req.params.id);
-    const openInvoices = db.prepare(
-      "SELECT id, invoice_number, total, amount_paid, invoice_date FROM invoices WHERE customer_id = ? AND status = 'open' ORDER BY invoice_date ASC"
-    ).all(req.params.id);
+    const openInvoices = db.prepare(`
+      SELECT i.id, i.invoice_number, i.total, i.amount_paid, i.invoice_date, i.due_date,
+        o.order_number, o.po_number
+      FROM invoices i
+      LEFT JOIN orders o ON o.id = i.order_id
+      WHERE i.customer_id = ? AND i.status = 'open'
+      ORDER BY i.invoice_date ASC
+    `).all(req.params.id);
     const activeCredits = db.prepare(
       "SELECT id, credit_number, amount, remaining_amount, reason, created FROM credit_notes WHERE customer_id = ? AND status = 'approved' AND remaining_amount > 0 ORDER BY created ASC"
     ).all(req.params.id);
     res.json({ ...bal, open_invoices: openInvoices, active_credits: activeCredits });
+  });
+
+  // ── Account Statement (JSON data + PDF) ───────────────────────────────────
+  // GET /customers/:id/statement?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
+  router.get("/customers/:id/statement", (req, res) => {
+    const { from_date, to_date } = req.query;
+    if (!from_date || !to_date) return res.status(400).json({ error: "from_date and to_date are required" });
+    try {
+      const data = generateStatementData(db, req.params.id, from_date, to_date);
+      if (!data) return res.status(404).json({ error: "Customer not found" });
+      res.json(data);
+    } catch (err) {
+      console.error("[GET /customers/:id/statement] error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /customers/:id/statement/pdf?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
+  router.get("/customers/:id/statement/pdf", async (req, res) => {
+    const { from_date, to_date } = req.query;
+    if (!from_date || !to_date) return res.status(400).json({ error: "from_date and to_date are required" });
+    try {
+      const data = generateStatementData(db, req.params.id, from_date, to_date);
+      if (!data) return res.status(404).json({ error: "Customer not found" });
+      const pdfBuffer = await generateStatementPdf(data);
+      const safeName = (data.customer.name || "statement").replace(/[^a-zA-Z0-9_-]/g, "_").substring(0, 40);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="statement_${safeName}_${from_date}_${to_date}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (err) {
+      console.error("[GET /customers/:id/statement/pdf] error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /customers/:id/statement/email — generate statement PDF and send via Resend
+  // Body: { from_date, to_date, recipient_override? }
+  router.post("/customers/:id/statement/email", async (req, res) => {
+    if (!emailModule.isEmailEnabled()) {
+      return res.status(503).json({ error: "Email is not configured (RESEND_API_KEY missing)" });
+    }
+    const { from_date, to_date, recipient_override } = req.body || {};
+    if (!from_date || !to_date) return res.status(400).json({ error: "from_date and to_date are required" });
+
+    try {
+      const data = generateStatementData(db, req.params.id, from_date, to_date);
+      if (!data) return res.status(404).json({ error: "Customer not found" });
+
+      const customer = data.customer;
+      const recipient = (recipient_override || customer.accounts_email || customer.email || "").trim();
+      if (!recipient) return res.status(400).json({ error: "No email address on customer record" });
+
+      const pdfBuffer = await generateStatementPdf(data);
+      const safeName = (customer.name || "statement").replace(/[^a-zA-Z0-9_-]/g, "_").substring(0, 40);
+      const filename = `statement_${safeName}_${from_date}_${to_date}.pdf`;
+      const subject = `Account Statement — ${customer.name} (${from_date} to ${to_date})`;
+      const text = `Please find your account statement for the period ${from_date} to ${to_date} attached.\n\nBalance Due: $${(data.summary?.total_balance_due || 0).toFixed(2)}\n\nThank you for your business.`;
+
+      const result = await emailModule.sendViaResend({
+        to: recipient,
+        subject,
+        text,
+        attachments: [{ filename, content: pdfBuffer }],
+      });
+
+      if (!result.success) return res.status(500).json({ error: result.error });
+      res.json({ success: true, message_id: result.message_id, recipient });
+    } catch (err) {
+      console.error("[POST /customers/:id/statement/email] error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Recalculate all customer balances (reconciliation)
@@ -4333,6 +4586,23 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
       after: Object.fromEntries(entries.map(([k, v]) => [k, String(v)])),
       summary: `Updated ${entries.length} setting(s): ${entries.map(([k]) => k).join(", ")}`,
     });
+    res.json({ success: true });
+  });
+
+  // GET /settings/billing-schedule
+  router.get("/settings/billing-schedule", (req, res) => {
+    res.json({
+      billing_weekly_day: getSetting(db, "billing_weekly_day", "5"),
+      billing_monthly_day: getSetting(db, "billing_monthly_day", "last"),
+    });
+  });
+
+  // PUT /settings/billing-schedule
+  router.put("/settings/billing-schedule", (req, res) => {
+    const { billing_weekly_day, billing_monthly_day } = req.body || {};
+    const upsert = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
+    if (billing_weekly_day !== undefined) upsert.run("billing_weekly_day", String(billing_weekly_day));
+    if (billing_monthly_day !== undefined) upsert.run("billing_monthly_day", String(billing_monthly_day));
     res.json({ success: true });
   });
 
@@ -5198,7 +5468,7 @@ function billCustomerRental(db, cust, mode) {
       let iterations = 0;
       while (billDate <= today && iterations < 24) {
         billOneCycle(billDate, cust.rental_frequency);
-        billDate = addFrequency(billDate, cust.rental_frequency);
+        billDate = addBillingFrequency(billDate, cust.rental_frequency, getBillingSettings(db));
         iterations++;
       }
       db.prepare("UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?")
@@ -5393,7 +5663,7 @@ function billCommercialAccount(db, cust, mode) {
       invoicesCreated++;
       transactionsCreated += txCount;
     }
-    const next = addFrequency(billDate, cust.rental_frequency);
+    const next = addBillingFrequency(billDate, cust.rental_frequency, getBillingSettings(db));
     db.prepare(
       "UPDATE customers SET next_rental_date = ?, next_invoice_date = ?, last_rental_date = ? WHERE id = ?"
     ).run(next, next, today, cust.id);
@@ -5412,7 +5682,7 @@ function billCommercialAccount(db, cust, mode) {
       }
       db.prepare(
         "UPDATE customers SET next_rental_date = ?, last_rental_date = ? WHERE id = ?"
-      ).run(addFrequency(billDate, cust.rental_frequency), today, cust.id);
+      ).run(addBillingFrequency(billDate, cust.rental_frequency, getBillingSettings(db)), today, cust.id);
     }
 
     if (invoiceDue) {
@@ -5428,7 +5698,7 @@ function billCommercialAccount(db, cust, mode) {
       }
       db.prepare(
         "UPDATE customers SET next_invoice_date = ? WHERE id = ?"
-      ).run(addFrequency(billDate, cust.invoice_frequency), cust.id);
+      ).run(addBillingFrequency(billDate, cust.invoice_frequency, getBillingSettings(db)), cust.id);
     }
   }
 

@@ -804,6 +804,165 @@ function CCReveal({ customerId, masked }) {
   );
 }
 
+// ==================== ACCOUNT STATEMENT MODAL ====================
+function StatementModal({ customerId, customerName, customerEmail, onClose, showToast, emailEnabled }) {
+  const today = new Date().toISOString().split("T")[0];
+  const firstOfMonth = today.substring(0, 8) + "01";
+
+  const [fromDate, setFromDate] = React.useState(firstOfMonth);
+  const [toDate, setToDate] = React.useState(today);
+  const [preview, setPreview] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [emailing, setEmailing] = React.useState(false);
+
+  function openPdf() {
+    if (!fromDate || !toDate) { showToast("Please select a date range", true); return; }
+    const url = api.getCustomerStatementPdfUrl(customerId, fromDate, toDate);
+    window.open(url, "_blank");
+  }
+
+  async function sendEmail() {
+    if (!fromDate || !toDate) { showToast("Please select a date range", true); return; }
+    if (!customerEmail) { showToast("No email address on customer record", true); return; }
+    setEmailing(true);
+    try {
+      await api.emailStatement(customerId, fromDate, toDate);
+      showToast(`Statement emailed to ${customerEmail}`);
+    } catch (e) {
+      showToast(e.message || "Failed to send email", true);
+    } finally {
+      setEmailing(false);
+    }
+  }
+
+  async function loadPreview() {
+    if (!fromDate || !toDate) return;
+    setLoading(true);
+    try {
+      const data = await api.getCustomerStatement(customerId, fromDate, toDate);
+      setPreview(data);
+    } catch (e) {
+      showToast(e.message || "Failed to load statement data", true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const s = preview?.summary;
+  const fmt = (n) => {
+    const v = Number(n || 0);
+    if (v < 0) return `(${Math.abs(v).toFixed(2)})`;
+    return `$${v.toFixed(2)}`;
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 28, width: 560, maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Account Statement</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{customerName}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 18 }}>✕</button>
+        </div>
+
+        {/* Date range */}
+        <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>FROM DATE</div>
+            <input type="date" value={fromDate} onChange={e => { setFromDate(e.target.value); setPreview(null); }}
+              style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: `1px solid ${C.inputBorder}`, background: C.input, color: C.text, fontSize: 13 }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>TO DATE</div>
+            <input type="date" value={toDate} onChange={e => { setToDate(e.target.value); setPreview(null); }}
+              style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: `1px solid ${C.inputBorder}`, background: C.input, color: C.text, fontSize: 13 }} />
+          </div>
+        </div>
+
+        {/* Quick presets */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+          {[
+            ["This Month", () => { const d = new Date(); const f = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`; setFromDate(f); setToDate(today); setPreview(null); }],
+            ["Last Month", () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); const f = d.toISOString().split("T")[0]; const last = new Date(d.getFullYear(), d.getMonth()+1, 0).toISOString().split("T")[0]; setFromDate(f); setToDate(last); setPreview(null); }],
+            ["Last 3 Months", () => { const d = new Date(); const t = d.toISOString().split("T")[0]; d.setMonth(d.getMonth()-3); d.setDate(1); setFromDate(d.toISOString().split("T")[0]); setToDate(t); setPreview(null); }],
+            ["This Year", () => { const y = new Date().getFullYear(); setFromDate(`${y}-01-01`); setToDate(today); setPreview(null); }],
+          ].map(([label, fn]) => (
+            <button key={label} onClick={fn}
+              style={{ fontSize: 11, padding: "4px 10px", borderRadius: 5, border: `1px solid ${C.border}`, background: C.panel, color: C.muted, cursor: "pointer" }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Preview button */}
+        <button onClick={loadPreview} disabled={loading}
+          style={{ width: "100%", padding: "8px 0", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panel, color: C.text, cursor: loading ? "not-allowed" : "pointer", fontSize: 13, marginBottom: 16, opacity: loading ? 0.6 : 1 }}>
+          {loading ? "Loading..." : "Preview Summary"}
+        </button>
+
+        {/* Summary preview */}
+        {preview && s && (
+          <div style={{ background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, padding: 14, marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Account Summary Preview</div>
+            {[
+              ["Balance Brought Forward", fmt(s.balance_brought_forward)],
+              ["Payments Received", s.payments_received > 0 ? `(${s.payments_received.toFixed(2)})` : "—"],
+              ["Balance After Payments", fmt(s.balance_after_payments), true],
+              ["Current Charges (ex GST)", fmt(s.current_charges_ex_gst)],
+              ["GST (10%)", fmt(s.current_charges_gst)],
+              ["Total Current Charges (inc GST)", fmt(s.current_charges_inc_gst)],
+            ].map(([label, value, bold]) => (
+              <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+                <span style={{ color: C.muted, fontWeight: bold ? 700 : 400 }}>{label}</span>
+                <span style={{ fontWeight: bold ? 700 : 400, color: C.text }}>{value}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13, fontWeight: 700 }}>
+              <span style={{ color: C.text }}>TOTAL BALANCE DUE</span>
+              <span style={{ color: C.accent }}>{fmt(s.total_balance_due)}</span>
+            </div>
+            <div style={{ display: "flex", gap: 12, marginTop: 8, padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
+              <div style={{ flex: 1, fontSize: 11 }}>
+                <div style={{ color: C.muted }}>Transactions</div>
+                <div style={{ fontWeight: 700, color: C.text }}>{preview.transactions?.length || 0} lines</div>
+              </div>
+              <div style={{ flex: 1, fontSize: 11 }}>
+                <div style={{ color: C.muted }}>Cylinder Holdings</div>
+                <div style={{ fontWeight: 700, color: C.text }}>{preview.cylinder_holdings?.length || 0} types</div>
+              </div>
+              <div style={{ flex: 1, fontSize: 11 }}>
+                <div style={{ color: C.muted }}>Overdue</div>
+                <div style={{ fontWeight: 700, color: s.overdue_amount > 0 ? C.red || "#ef4444" : C.green }}>{fmt(s.overdue_amount)}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={onClose}
+            style={{ flex: 1, padding: "10px 0", borderRadius: 6, border: `1px solid ${C.border}`, background: "none", color: C.muted, cursor: "pointer", fontSize: 13 }}>
+            Cancel
+          </button>
+          {emailEnabled && (
+            customerEmail
+              ? <button onClick={sendEmail} disabled={emailing}
+                  style={{ flex: 1, padding: "10px 0", borderRadius: 6, border: "none", background: C.green || "#22c55e", color: "#fff", cursor: emailing ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700, opacity: emailing ? 0.6 : 1 }}>
+                  {emailing ? "Sending..." : `Email to ${customerEmail}`}
+                </button>
+              : <span style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: C.muted, fontStyle: "italic" }}>No email on customer</span>
+          )}
+          <button onClick={openPdf}
+            style={{ flex: 1, padding: "10px 0", borderRadius: 6, border: "none", background: C.accent, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
+            Open PDF
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ==================== CUSTOMERS VIEW ====================
 // ==================== CUSTOMERS VIEW ====================
 const AU_STATES = ["NSW", "VIC", "QLD", "WA", "SA", "TAS", "ACT", "NT"];
@@ -825,6 +984,7 @@ const EMPTY_CUSTOMER_FORM = {
   rep_name: "", payment_terms: "", invoice_frequency: "", new_internal_note: "", customer_category: "",
   chain: false, alternative_contact_name: "", alternative_contact_phone: "",
   compliance_not_required: false, archived: false,
+  next_invoice_date: "", next_rental_date: "",
 };
 
 function parseInternalNotes(raw) {
@@ -960,7 +1120,206 @@ function parseCSV(text) {
   return { headers, rows };
 }
 
-function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderTypes, userRole }) {
+// ─── Record Payment Modal ───────────────────────────────────────────────────
+function RecordPaymentModal({ openInvoices, customerId, onClose, onDone, showToast }) {
+  const today = new Date().toISOString().split("T")[0];
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("bank_transfer");
+  const [reference, setReference] = useState("");
+  const [date, setDate] = useState(today);
+  const [notes, setNotes] = useState("");
+  const [allocations, setAllocations] = useState(() => {
+    const a = {};
+    for (const inv of openInvoices) {
+      const outstanding = Math.max(0, (inv.total || 0) - (inv.amount_paid || 0));
+      a[inv.id] = { checked: false, amount: outstanding.toFixed(2) };
+    }
+    return a;
+  });
+  const [saving, setSaving] = useState(false);
+
+  const grossOf = (net) => Math.round((net || 0) * 1.1 * 100) / 100;
+
+  const autoMatch = () => {
+    const total = parseFloat(amount);
+    if (!total || total <= 0) return;
+    let remaining = total;
+    const next = {};
+    for (const inv of openInvoices) {
+      const outstanding = grossOf(Math.max(0, (inv.total || 0) - (inv.amount_paid || 0)));
+      if (remaining <= 0) {
+        next[inv.id] = { checked: false, amount: outstanding.toFixed(2) };
+      } else if (remaining >= outstanding) {
+        next[inv.id] = { checked: true, amount: outstanding.toFixed(2) };
+        remaining -= outstanding;
+      } else {
+        next[inv.id] = { checked: true, amount: remaining.toFixed(2) };
+        remaining = 0;
+      }
+    }
+    setAllocations(next);
+  };
+
+  const toggleCheck = (id) => {
+    setAllocations(prev => ({ ...prev, [id]: { ...prev[id], checked: !prev[id].checked } }));
+  };
+
+  const setInvAmount = (id, val) => {
+    setAllocations(prev => ({ ...prev, [id]: { ...prev[id], amount: val } }));
+  };
+
+  const totalAllocated = Object.entries(allocations)
+    .filter(([, v]) => v.checked)
+    .reduce((s, [, v]) => s + (parseFloat(v.amount) || 0), 0);
+
+  const checkedCount = Object.values(allocations).filter(v => v.checked).length;
+
+  const handleRecord = async () => {
+    if (checkedCount === 0) { showToast("Select at least one invoice", "error"); return; }
+    setSaving(true);
+    try {
+      for (const inv of openInvoices) {
+        const alloc = allocations[inv.id];
+        if (!alloc.checked) continue;
+        const amt = parseFloat(alloc.amount);
+        if (!amt || amt <= 0) continue;
+        // The existing /invoices/:id/payment endpoint expects NET amount.
+        // Our modal shows gross amounts. Divide by 1.1 to get net.
+        const netAmt = Math.round(amt / 1.1 * 100) / 100;
+        await api.recordInvoicePayment(inv.id, {
+          amount: netAmt,
+          method,
+          reference,
+          date,
+          notes,
+        });
+      }
+      showToast(`Payment recorded against ${checkedCount} invoice${checkedCount !== 1 ? "s" : ""}`);
+      onDone();
+    } catch (e) {
+      showToast(e.message || "Failed to record payment", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, width: 640, maxWidth: "95vw", maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Record Payment</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20, lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Payment details */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+          <div>
+            <label style={labelStyle}>Payment Amount ($)</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                type="number" min="0" step="0.01" placeholder="0.00"
+                value={amount} onChange={e => setAmount(e.target.value)}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <button onClick={autoMatch} style={{ ...btnStyle(C.blue), padding: "8px 12px", fontSize: 12, whiteSpace: "nowrap" }}>Auto Match</button>
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Method</label>
+            <select value={method} onChange={e => setMethod(e.target.value)} style={inputStyle}>
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="cash">Cash</option>
+              <option value="cheque">Cheque</option>
+              <option value="card">Card</option>
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Reference</label>
+            <input value={reference} onChange={e => setReference(e.target.value)} placeholder="e.g. EFT ref, cheque #" style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Date</label>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} />
+          </div>
+          <div style={{ gridColumn: "1/-1" }}>
+            <label style={labelStyle}>Notes</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional notes" style={inputStyle} />
+          </div>
+        </div>
+
+        {/* Invoice list */}
+        <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+          Outstanding Invoices — tick to include in this payment
+        </div>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden", marginBottom: 14 }}>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: C.panel, borderBottom: `1px solid ${C.border}` }}>
+                <th style={{ padding: "6px 8px", width: 28 }}></th>
+                {["Invoice #", "Order #", "Date", "Due", "Total (inc GST)", "Already Paid", "Outstanding", "Pay This"].map(h => (
+                  <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {openInvoices.map(inv => {
+                const totalGross = grossOf(inv.total || 0);
+                const paidGross = grossOf(inv.amount_paid || 0);
+                const outstandingGross = Math.max(0, totalGross - paidGross);
+                const alloc = allocations[inv.id] || { checked: false, amount: outstandingGross.toFixed(2) };
+                return (
+                  <tr key={inv.id} style={{ borderBottom: `1px solid ${C.border}`, background: alloc.checked ? "#22c55e08" : "transparent" }}>
+                    <td style={{ padding: "6px 8px" }}>
+                      <input type="checkbox" checked={!!alloc.checked} onChange={() => toggleCheck(inv.id)} />
+                    </td>
+                    <td style={{ padding: "6px 8px", color: C.accent, fontWeight: 600 }}>{inv.invoice_number || "—"}</td>
+                    <td style={{ padding: "6px 8px", color: C.muted }}>{inv.order_number || "—"}</td>
+                    <td style={{ padding: "6px 8px" }}>{inv.invoice_date || "—"}</td>
+                    <td style={{ padding: "6px 8px", color: inv.due_date && inv.due_date < today ? C.red : C.muted }}>{inv.due_date || "—"}</td>
+                    <td style={{ padding: "6px 8px", fontWeight: 600 }}>${totalGross.toFixed(2)}</td>
+                    <td style={{ padding: "6px 8px", color: paidGross > 0 ? C.green : C.muted }}>{paidGross > 0 ? `$${paidGross.toFixed(2)}` : "—"}</td>
+                    <td style={{ padding: "6px 8px", fontWeight: 700, color: C.red }}>${outstandingGross.toFixed(2)}</td>
+                    <td style={{ padding: "6px 8px" }}>
+                      <input
+                        type="number" min="0" step="0.01"
+                        value={alloc.amount}
+                        onChange={e => setInvAmount(inv.id, e.target.value)}
+                        disabled={!alloc.checked}
+                        style={{ ...inputStyle, width: 80, padding: "4px 6px", opacity: alloc.checked ? 1 : 0.4 }}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Summary & submit */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 13 }}>
+            <span style={{ color: C.muted }}>Total allocated: </span>
+            <span style={{ fontWeight: 700, color: totalAllocated > 0 ? C.green : C.muted }}>${totalAllocated.toFixed(2)}</span>
+            {amount && parseFloat(amount) > 0 && Math.abs(totalAllocated - parseFloat(amount)) > 0.01 && (
+              <span style={{ color: C.red, marginLeft: 8, fontSize: 11 }}>
+                ≠ entered amount ${parseFloat(amount).toFixed(2)}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose} style={btnStyle(C.muted)}>Cancel</button>
+            <button onClick={handleRecord} disabled={saving || checkedCount === 0} style={{ ...btnStyle(C.green), opacity: (saving || checkedCount === 0) ? 0.6 : 1 }}>
+              {saving ? "Recording…" : `Record Payment (${checkedCount})`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderTypes, userRole, emailEnabled, emailConfig }) {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY_CUSTOMER_FORM);
   const [search, setSearch] = useState("");
@@ -994,6 +1353,8 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
       alternative_contact_phone: c.alternative_contact_phone || "",
       compliance_not_required: !!c.compliance_not_required,
       archived: !!c.archived,
+      next_invoice_date: c.next_invoice_date || "",
+      next_rental_date: c.next_rental_date || "",
     });
   };
 
@@ -1043,11 +1404,43 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
   const editingCust = editing && editing !== "new" ? (customers || []).find(c => c.id === editing) : null;
   const existingNotes = parseInternalNotes(editingCust?.internal_notes);
 
-  // Load this customer's orders + balance + last sale price + price list whenever the edit panel opens
+  // Load this customer's orders + balance + last sale price + price list + on-hand whenever the edit panel opens
   const [custOrders, setCustOrders] = useState([]);
   const [custBalance, setCustBalance] = useState(null);
   const [lastSalePrice, setLastSalePrice] = useState(null);
   const [custPriceList, setCustPriceList] = useState([]);
+  const [custOnHand, setCustOnHand] = useState([]);
+  const [paymentModal, setPaymentModal] = useState(false);
+  const [custInvoiceViewId, setCustInvoiceViewId] = useState(null);
+  const [showStatementModal, setShowStatementModal] = useState(false);
+  const [billingBusy, setBillingBusy] = useState(false);
+
+  const isCommercialAccount = form.customer_category === "Commercial" && form.account_customer;
+
+  const runBillingNow = async () => {
+    if (!editing || editing === "new") return;
+    setBillingBusy(true);
+    try {
+      const r = await api.generateRentalsForce([editing]);
+      if (r.invoicesCreated > 0) {
+        showToast(`Billing run complete: ${r.invoicesCreated} invoice(s) created`);
+      } else {
+        showToast("No billable activity found for this period", "info");
+      }
+      // Reload orders/balance
+      const [orders, onHand] = await Promise.all([
+        api.getCustomerOrders(editing),
+        api.getCustomerOnHand(editing),
+      ]);
+      setCustOrders(orders);
+      setCustOnHand(onHand);
+    } catch (e) {
+      showToast(e.message || "Billing run failed", "error");
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (editing && editing !== "new") {
       let cancelled = false;
@@ -1055,12 +1448,16 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
       api.getCustomerBalance(editing).then(b => { if (!cancelled) setCustBalance(b); }).catch(() => { if (!cancelled) setCustBalance(null); });
       api.getLastSalePrice(editing).then(p => { if (!cancelled) setLastSalePrice(p); }).catch(() => { if (!cancelled) setLastSalePrice(null); });
       api.getCustomerPriceList(editing).then(p => { if (!cancelled) setCustPriceList(p || []); }).catch(() => { if (!cancelled) setCustPriceList([]); });
+      api.getCustomerOnHand(editing).then(h => { if (!cancelled) setCustOnHand(h || []); }).catch(() => { if (!cancelled) setCustOnHand([]); });
       return () => { cancelled = true; };
     } else {
       setCustOrders([]);
       setCustBalance(null);
       setLastSalePrice(null);
       setCustPriceList([]);
+      setCustOnHand([]);
+      setPaymentModal(false);
+      setCustInvoiceViewId(null);
     }
   }, [editing]);
 
@@ -1270,11 +1667,28 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
               <select value={form.invoice_frequency} onChange={e => setForm(p => ({ ...p, invoice_frequency: e.target.value }))} style={inputStyle}>
                 <option value="">— Select —</option>
                 <option value="Weekly">Weekly</option>
-                <option value="Fortnightly">Fortnightly (Friday evening)</option>
+                <option value="Fortnightly">Fortnightly</option>
                 <option value="Monthly">Monthly</option>
+                <option value="Quarterly">Quarterly</option>
               </select>
-              <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>Controls when PDF invoices are sent to the customer, regardless of when they are generated.</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>For commercial accounts, all delivered orders in the period are combined onto one invoice. The billing day is configured in Admin → Billing Schedule.</div>
             </div>
+            {editing !== "new" && isCommercialAccount && (
+              <>
+                <div>
+                  <label style={labelStyle}>Next Invoice Date <span style={{ color: C.muted, fontWeight: 400, fontSize: 10 }}>(auto-advances after billing)</span></label>
+                  <input type="date" value={form.next_invoice_date}
+                    onChange={e => setForm(p => ({ ...p, next_invoice_date: e.target.value }))}
+                    style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>Next Rental Billing Date <span style={{ color: C.muted, fontWeight: 400, fontSize: 10 }}>(auto-advances after billing)</span></label>
+                  <input type="date" value={form.next_rental_date}
+                    onChange={e => setForm(p => ({ ...p, next_rental_date: e.target.value }))}
+                    style={inputStyle} />
+                </div>
+              </>
+            )}
             <div>
               <label style={labelStyle}>Customer Type</label>
               <select value={form.customer_type} onChange={e => setForm(p => ({ ...p, customer_type: e.target.value }))} style={inputStyle}>
@@ -1421,12 +1835,60 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
               </>
             )}
 
+            {/* Cylinders on hand — only on existing customers */}
+            {editing !== "new" && custOnHand.length > 0 && (
+              <>
+                <div style={sectionStyle}>Cylinders on Hand</div>
+                <div style={{ gridColumn: "1/-1", overflowX: "auto" }}>
+                  <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                        {["Cylinder Type", "On Hand (qty)"].map(h => (
+                          <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {custOnHand.map(row => (
+                        <tr key={row.cylinder_type} style={{ borderBottom: `1px solid ${C.border}` }}>
+                          <td style={{ padding: "6px 8px", fontWeight: 600 }}>{row.cylinder_label}</td>
+                          <td style={{ padding: "6px 8px", fontWeight: 700, color: row.on_hand > 0 ? C.blue : C.red }}>
+                            {row.on_hand}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            {editing !== "new" && custOnHand.length === 0 && (
+              <>
+                <div style={sectionStyle}>Cylinders on Hand</div>
+                <div style={{ gridColumn: "1/-1", padding: "10px 0", fontSize: 12, color: C.muted }}>
+                  No cylinders currently on hand at this customer.
+                </div>
+              </>
+            )}
+
             {/* Orders & Balance panel — only on existing customers */}
             {editing !== "new" && (
               <>
                 <div style={{ ...sectionStyle, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span>Orders & Balance</span>
-                  {onOpenOrder && <button onClick={() => onOpenOrder(null, editing)} style={{ ...btnStyle(C.green), padding: "4px 12px", fontSize: 11, fontWeight: 700, textTransform: "none", letterSpacing: 0 }}>+ New Order</button>}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setShowStatementModal(true)}
+                      style={{ ...btnStyle(C.accent), padding: "4px 12px", fontSize: 11, fontWeight: 700, textTransform: "none", letterSpacing: 0 }}>
+                      Statement
+                    </button>
+                    {isCommercialAccount && (
+                      <button onClick={runBillingNow} disabled={billingBusy}
+                        style={{ ...btnStyle(C.blue), padding: "4px 12px", fontSize: 11, fontWeight: 700, textTransform: "none", letterSpacing: 0, opacity: billingBusy ? 0.6 : 1 }}>
+                        {billingBusy ? "Billing…" : "Run Billing"}
+                      </button>
+                    )}
+                    {onOpenOrder && <button onClick={() => onOpenOrder(null, editing)} style={{ ...btnStyle(C.green), padding: "4px 12px", fontSize: 11, fontWeight: 700, textTransform: "none", letterSpacing: 0 }}>+ New Order</button>}
+                  </div>
                 </div>
 <div style={{ gridColumn: "1/-1" }}>
                   <label style={labelStyle}>Customer Orders ({custOrders.length})</label>
@@ -1437,7 +1899,7 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
                       <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
                         <thead>
                           <tr style={{ background: C.panel, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0 }}>
-                            {["Order #", "Date", "PO#", "Order", "Total", "Paid", "Status"].map(h => (
+                            {["Order #", "Date", "PO#", "Order", "Total", "Del'd", "Ret'd", "Paid", "Invoice", "Status"].map(h => (
                               <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
                             ))}
                           </tr>
@@ -1455,8 +1917,18 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
                               <td style={{ padding: "6px 8px", color: C.muted }}>{o.po_number || "—"}</td>
                               <td style={{ padding: "6px 8px", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.order_detail || "—"}</td>
                               <td style={{ padding: "6px 8px", fontWeight: 700, color: C.green }} title="Includes GST">{o.total_price ? fmtMoney(o.total_price) : "—"}</td>
+                              <td style={{ padding: "6px 8px", color: o.total_delivered > 0 ? C.blue : C.muted, fontWeight: o.total_delivered > 0 ? 700 : 400 }}>{o.total_delivered > 0 ? o.total_delivered : "—"}</td>
+                              <td style={{ padding: "6px 8px", color: o.total_returned > 0 ? C.accent : C.muted, fontWeight: o.total_returned > 0 ? 700 : 400 }}>{o.total_returned > 0 ? o.total_returned : "—"}</td>
                               <td style={{ padding: "6px 8px" }}>
                                 {o.paid ? <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#22c55e22", color: C.green }}>PAID</span> : <span style={{ color: C.muted }}>—</span>}
+                              </td>
+                              <td style={{ padding: "6px 8px" }} onClick={e => e.stopPropagation()}>
+                                {o.invoice_id ? (
+                                  <button onClick={() => setCustInvoiceViewId(o.invoice_id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                                    <span style={{ color: C.accent, fontWeight: 700, fontSize: 11 }}>{o.invoice_number || "View"}</span>
+                                    {o.invoice_status && <span style={{ marginLeft: 4, padding: "1px 4px", borderRadius: 3, fontSize: 9, fontWeight: 700, background: o.invoice_status === "paid" ? "#22c55e22" : "#f59e0b22", color: o.invoice_status === "paid" ? C.green : C.accent }}>{o.invoice_status.toUpperCase()}</span>}
+                                  </button>
+                                ) : <span style={{ color: C.muted }}>—</span>}
                               </td>
                               <td style={{ padding: "6px 8px", color: C.muted }}>{o.status}</td>
                             </tr>
@@ -1465,15 +1937,76 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
                       </table>
                     </div>
                   )}
+                  {/* Record Payment button — shown when there are open invoices */}
+                  {custBalance && (custBalance.open_invoices?.length || 0) > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <button
+                        onClick={() => setPaymentModal(true)}
+                        style={{ ...btnStyle(C.green), padding: "6px 14px", fontSize: 12 }}
+                      >
+                        Record Payment
+                      </button>
+                    </div>
+                  )}
                 </div>
               </>
             )}
           </div>
+
+          {/* Record Payment Modal */}
+          {paymentModal && custBalance && (
+            <RecordPaymentModal
+              openInvoices={custBalance.open_invoices || []}
+              customerId={editing}
+              onClose={() => setPaymentModal(false)}
+              onDone={async () => {
+                setPaymentModal(false);
+                const [orders, balance] = await Promise.all([
+                  api.getCustomerOrders(editing).catch(() => []),
+                  api.getCustomerBalance(editing).catch(() => null),
+                ]);
+                setCustOrders(orders || []);
+                setCustBalance(balance);
+              }}
+              showToast={showToast}
+            />
+          )}
+
           <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
             <button onClick={save} style={btnStyle(C.green)}>Save</button>
             <button onClick={() => setEditing(null)} style={btnStyle(C.muted)}>Cancel</button>
           </div>
         </Card>
+      )}
+
+      {showStatementModal && editing && editing !== "new" && (
+        <StatementModal
+          customerId={editing}
+          customerName={customers.find(c => c.id === editing)?.name || "Customer"}
+          customerEmail={(customers.find(c => c.id === editing)?.accounts_email || customers.find(c => c.id === editing)?.email || "").trim()}
+          showToast={showToast}
+          emailEnabled={emailEnabled}
+          onClose={() => setShowStatementModal(false)}
+        />
+      )}
+
+      {custInvoiceViewId && (
+        <InvoiceDetailModal
+          invoiceId={custInvoiceViewId}
+          customers={customers || []}
+          emailEnabled={emailEnabled}
+          emailConfig={emailConfig}
+          showToast={showToast}
+          onClose={() => setCustInvoiceViewId(null)}
+          onPaymentRecorded={async () => {
+            const [orders, balance] = await Promise.all([
+              api.getCustomerOrders(editing).catch(() => []),
+              api.getCustomerBalance(editing).catch(() => null),
+            ]);
+            setCustOrders(orders || []);
+            setCustBalance(balance);
+          }}
+        />
       )}
 
       {!editing && (
@@ -1663,16 +2196,23 @@ function DeliveryView({ customers, cylinderTypes, showToast, refreshAll }) {
 
   const submit = async () => {
     try {
+      // For sale-type cylinders that have a linked rental cylinder type, record
+      // transactions against the linked rental type so the on-hand tracking query
+      // (which looks at item_type='cylinder' transactions) picks them up correctly.
+      const txCylinderType = (isSaleItem && saleCap?.linked && saleCap.rental_cylinder_type)
+        ? saleCap.rental_cylinder_type
+        : form.cylinder_type;
+
       const promises = [];
       if (form.delivered > 0) {
         promises.push(api.createTransaction({
-          customer_id: form.customer_id, cylinder_type: form.cylinder_type,
+          customer_id: form.customer_id, cylinder_type: txCylinderType,
           type: "delivery", qty: form.delivered, date: form.date, notes: form.notes,
         }));
       }
       if (form.returned > 0) {
         promises.push(api.createTransaction({
-          customer_id: form.customer_id, cylinder_type: form.cylinder_type,
+          customer_id: form.customer_id, cylinder_type: txCylinderType,
           type: "return", qty: form.returned, date: form.date, notes: form.notes,
         }));
       }
@@ -2065,6 +2605,307 @@ function RentalSchedulerControls({ customers, showToast, onComplete }) {
   );
 }
 
+// ─── Shared Invoice Detail Modal ────────────────────────────────────────────
+// Used in BillingView, RentalHistoryView, OrdersView, and CustomersView.
+// Fetches its own full invoice detail via api.getInvoice(invoiceId).
+function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, showToast, onClose, onPaymentRecorded }) {
+  const today = new Date().toISOString().split("T")[0];
+  const [invoice, setInvoice] = useState(null);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({ amount: "", method: "manual", reference: "", date: today, notes: "" });
+
+  const customerMap = useMemo(() => {
+    const m = {};
+    for (const c of (customers || [])) m[c.id] = c;
+    return m;
+  }, [customers]);
+
+  useEffect(() => {
+    if (!invoiceId) return;
+    let active = true;
+    setInvoice(null);
+    setShowPaymentForm(false);
+    setPaymentForm({ amount: "", method: "manual", reference: "", date: today, notes: "" });
+    api.getInvoice(invoiceId).then(d => { if (active) setInvoice(d); }).catch(() => {});
+    return () => { active = false; };
+  }, [invoiceId]);
+
+  const recordPayment = async () => {
+    const amt = parseFloat(paymentForm.amount);
+    if (!amt || amt <= 0) { showToast("Enter a payment amount", "error"); return; }
+    try {
+      const r = await api.recordInvoicePayment(invoiceId, paymentForm);
+      let msg = "Payment recorded";
+      if (r?.push_attempted && r.push_success) msg += " — order pushed to OptimoRoute";
+      else if (r?.push_attempted && !r.push_success) msg += ` — push failed: ${r.push_error || "unknown error"}`;
+      showToast(msg, r?.push_attempted && !r.push_success ? "error" : "success");
+      const updated = await api.getInvoice(invoiceId);
+      setInvoice(updated);
+      setShowPaymentForm(false);
+      setPaymentForm({ amount: "", method: "manual", reference: "", date: today, notes: "" });
+      if (onPaymentRecorded) onPaymentRecorded();
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
+  const statusBadge = (status) => {
+    const colors = { open: { bg: "#f59e0b22", fg: C.accent }, paid: { bg: "#22c55e22", fg: C.green }, void: { bg: "#6b728022", fg: C.muted }, pending: { bg: "#a855f722", fg: "#a855f7" } };
+    const col = colors[status] || { bg: C.input, fg: C.muted };
+    return <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: col.bg, color: col.fg, textTransform: "uppercase" }}>{status}</span>;
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 24, maxWidth: 640, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: C.accent }}>{invoice?.invoice_number || "…"}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {emailEnabled && invoice && (() => {
+              const cust = customerMap[invoice.customer_id];
+              const recipient = (cust?.accounts_email || cust?.email || "").trim();
+              if (!recipient) return <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>No email on customer</span>;
+              return (
+                <button onClick={async () => {
+                  if (!confirm(`Send invoice ${invoice.invoice_number} to ${recipient}${emailConfig?.test_mode ? "\n\nTEST MODE: emails go to Resend sandbox." : ""}?`)) return;
+                  try { const r = await api.sendInvoiceEmail(invoice.id); showToast(`Sent to ${r.recipient}${emailConfig?.test_mode ? " (TEST)" : ""}`); }
+                  catch (e) { showToast(e.message, "error"); }
+                }} style={{ ...btnStyle(C.green), padding: "6px 12px", fontSize: 12 }}>Send Email</button>
+              );
+            })()}
+            {invoice && (
+              <button onClick={() => window.open(`/api/invoices/${invoice.id}/print`, "_blank")} style={{ ...btnStyle("#6b7280"), padding: "6px 12px", fontSize: 12 }}>Print / PDF</button>
+            )}
+            <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>✕</button>
+          </div>
+        </div>
+
+        {!invoice ? (
+          <div style={{ padding: 32, textAlign: "center", color: C.muted }}>Loading…</div>
+        ) : (
+          <>
+            {/* Meta grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Customer</div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{formatCustomerDisplay(customerMap[invoice.customer_id]) || invoice.customer_name || invoice.address || "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice Date</div>
+                <div style={{ fontSize: 13 }}>{invoice.invoice_date}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Due Date</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: invoice.due_date && invoice.due_date < today && invoice.status === "open" ? C.red : C.text }}>
+                  {invoice.due_date || "—"}
+                  {invoice.due_date && invoice.due_date < today && invoice.status === "open" && (
+                    <span style={{ marginLeft: 6, fontSize: 10, background: C.red, color: "#fff", borderRadius: 3, padding: "1px 5px" }}>OVERDUE</span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Status</div>
+                <div style={{ marginTop: 2 }}>{statusBadge(invoice.status)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Subtotal (net)</div>
+                <div style={{ fontSize: 13, color: C.text }}>{fmtCurrency(invoice.total)}</div>
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>+ GST {fmtCurrency(Math.round((invoice.total || 0) * 0.10 * 100) / 100)}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginTop: 4 }}>{fmtMoney(invoice.total)} <span style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>inc GST</span></div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Paid (inc GST)</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: C.green }}>{fmtMoney(invoice.amount_paid)}</div>
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Outstanding (inc GST)</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: ((invoice.total || 0) - (invoice.amount_paid || 0)) > 0 ? C.red : C.muted }}>
+                  {fmtMoney((invoice.total || 0) - (invoice.amount_paid || 0))}
+                </div>
+              </div>
+            </div>
+
+            {/* Linked Orders */}
+            {invoice.orderSections?.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 8 }}>Linked Orders</div>
+                {invoice.orderSections.map((section, si) => (
+                  <div key={section.order?.id || si} style={{ marginBottom: 12, background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+                    <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: C.accent }}>{section.order?.order_number || "—"}</span>
+                      <span style={{ fontSize: 12, color: C.muted }}>{section.order?.order_date || ""}</span>
+                      {section.order?.order_detail && <span style={{ fontSize: 12, color: C.text }}>{section.order.order_detail}</span>}
+                      {section.order?.po_number && <span style={{ fontSize: 12, color: C.muted }}>PO: {section.order.po_number}</span>}
+                    </div>
+                    {section.lines?.length > 0 ? (
+                      <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+                            <th style={{ textAlign: "left", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Item</th>
+                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Qty</th>
+                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Unit Price</th>
+                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {section.lines.map((l, i) => (
+                            <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                              <td style={{ padding: "5px 10px", fontWeight: 600 }}>{l.cylinder_label || "—"}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.qty}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>No line items</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Rental Charges */}
+            {invoice.rentalLines?.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Rental Charges</div>
+                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                  <thead>
+                    <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+                      <th style={{ textAlign: "left", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Cylinder</th>
+                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Qty on Hand</th>
+                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Rate</th>
+                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Charge</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.rentalLines.map((l, i) => (
+                      <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "5px 10px", fontWeight: 600 }}>{l.cylinder_label || l.notes || "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.qty != null ? l.qty : "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.unit_price != null ? fmtCurrency(l.unit_price) : "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total != null ? l.line_total : l.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Fallback flat line items */}
+            {!invoice.orderSections?.length && !invoice.rentalLines?.length && invoice.lines?.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Line Items</div>
+                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", border: `1px solid ${C.border}`, borderRadius: 6 }}>
+                  <thead>
+                    <tr style={{ background: C.panel, borderBottom: `1px solid ${C.border}` }}>
+                      <th style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Item</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Qty</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Unit Price</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Line Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.lines.map((l, i) => (
+                      <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "6px 8px", fontWeight: 600 }}>{l.cylinder_label || "—"}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{l.qty}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Payments history */}
+            <div>
+              <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Payments</div>
+              {invoice.payments?.length > 0 ? (
+                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      {["Date", "Method", "Reference", "Amount"].map(h => <th key={h} style={{ textAlign: "left", padding: "4px 6px", color: C.muted }}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.payments.map(p => (
+                      <tr key={p.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: "4px 6px" }}>{p.date}</td>
+                        <td style={{ padding: "4px 6px" }}>{p.method || "—"}</td>
+                        <td style={{ padding: "4px 6px", color: C.muted }}>{p.reference || "—"}</td>
+                        <td style={{ padding: "4px 6px", fontWeight: 600, color: C.green }}>{fmtCurrency(p.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ padding: 12, color: C.muted, fontSize: 12, background: C.input, borderRadius: 6 }}>No payments recorded</div>
+              )}
+
+              {/* Record Payment form */}
+              {invoice.status !== "void" && (
+                <div style={{ marginTop: 12 }}>
+                  {!showPaymentForm ? (
+                    <button onClick={() => {
+                      const owed = Math.max(0, (invoice.total || 0) - (invoice.amount_paid || 0));
+                      setPaymentForm(f => ({ ...f, amount: owed > 0 ? owed.toFixed(2) : "" }));
+                      setShowPaymentForm(true);
+                    }} style={{ ...btnStyle(C.green), padding: "8px 16px", fontSize: 13 }}>+ Record Payment</button>
+                  ) : (
+                    <div style={{ padding: 12, background: C.input, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                      <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 8 }}>New Payment</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                        <div>
+                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Amount *</label>
+                          <input type="number" step="0.01" min="0" value={paymentForm.amount} onChange={e => setPaymentForm(f => ({ ...f, amount: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Date</label>
+                          <input type="date" value={paymentForm.date} onChange={e => setPaymentForm(f => ({ ...f, date: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Method</label>
+                          <select value={paymentForm.method} onChange={e => setPaymentForm(f => ({ ...f, method: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }}>
+                            <option value="manual">Manual</option>
+                            <option value="cash">Cash</option>
+                            <option value="eft">EFT / Bank Transfer</option>
+                            <option value="credit_card">Credit Card</option>
+                            <option value="cheque">Cheque</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Reference</label>
+                          <input type="text" value={paymentForm.reference} onChange={e => setPaymentForm(f => ({ ...f, reference: e.target.value }))} placeholder="optional" style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Notes</label>
+                        <input type="text" value={paymentForm.notes} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} placeholder="optional" style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+                      </div>
+                      {invoice.status === "pending" && (
+                        <div style={{ fontSize: 11, color: "#a855f7", marginBottom: 8, padding: 6, background: "#a855f722", borderRadius: 4 }}>
+                          ℹ This invoice is pending (order not yet delivered). Payment will be held as a prepayment.
+                        </div>
+                      )}
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={recordPayment} style={{ ...btnStyle(C.green), padding: "6px 14px", fontSize: 12 }}>Save Payment</button>
+                        <button onClick={() => setShowPaymentForm(false)} style={{ ...btnStyle(C.muted), padding: "6px 14px", fontSize: 12 }}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, emailEnabled, emailConfig }) {
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
@@ -2075,11 +2916,7 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
   const [statusFilter, setStatusFilter] = useState("all"); // all | open | paid | void
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [selectedInvoice, setSelectedInvoice] = useState(null); // for detail modal
-  const [detailData, setDetailData] = useState(null);
-  // Round 3: payment recording form state
-  const [showPaymentForm, setShowPaymentForm] = useState(false);
-  const [paymentForm, setPaymentForm] = useState({ amount: "", method: "manual", reference: "", date: new Date().toISOString().split("T")[0], notes: "" });
+  const [selectedInvoice, setSelectedInvoice] = useState(null); // for InvoiceDetailModal
 
   const customerMap = useMemo(() => {
     const m = {};
@@ -2161,44 +2998,15 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
     };
   }, [invoices]);
 
-  const openDetail = async (inv) => {
-    setSelectedInvoice(inv);
-    setDetailData(null);
-    setShowPaymentForm(false);
-    setPaymentForm({ amount: "", method: "manual", reference: "", date: new Date().toISOString().split("T")[0], notes: "" });
-    try {
-      const data = await api.getInvoice(inv.id);
-      setDetailData(data);
-    } catch (e) { /* tolerate */ }
-  };
-
-  const recordPayment = async () => {
-    if (!selectedInvoice) return;
-    const amt = parseFloat(paymentForm.amount);
-    if (!amt || amt <= 0) { showToast("Enter a payment amount", "error"); return; }
-    try {
-      const r = await api.recordInvoicePayment(selectedInvoice.id, paymentForm);
-      let msg = "Payment recorded";
-      if (r?.push_attempted && r.push_success) msg += " — order pushed to OptimoRoute";
-      else if (r?.push_attempted && !r.push_success) msg += ` — but Optimo push failed: ${r.push_error || "unknown error"}`;
-      showToast(msg, r?.push_attempted && !r.push_success ? "error" : "success");
-      // Refresh invoice list and detail
-      await load();
-      await openDetail({ ...selectedInvoice });
-      // Refresh customer balances since payment changes them
-      try { reloadCustomers && reloadCustomers(); } catch (e) {}
-    } catch (e) { showToast(e.message, "error"); }
-  };
-
   const statusBadge = (status) => {
     const colors = {
       open:    { bg: "#f59e0b22", fg: C.accent },
       paid:    { bg: "#22c55e22", fg: C.green },
       void:    { bg: "#6b728022", fg: C.muted },
-      pending: { bg: "#a855f722", fg: "#a855f7" },  // round 3: not yet delivered
+      pending: { bg: "#a855f722", fg: "#a855f7" },
     };
-    const c = colors[status] || { bg: C.input, fg: C.muted };
-    return <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: c.bg, color: c.fg, textTransform: "uppercase" }}>{status}</span>;
+    const col = colors[status] || { bg: C.input, fg: C.muted };
+    return <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: col.bg, color: col.fg, textTransform: "uppercase" }}>{status}</span>;
   };
 
   const renderGroupSection = (title, groups, badgeColor) => groups.length > 0 && (
@@ -2247,7 +3055,7 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
                     </td>
                     <td style={{ padding: "4px 6px" }}>{statusBadge(inv.status)}</td>
                     <td style={{ padding: "4px 6px" }}>
-                      <button onClick={() => openDetail(inv)} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 11 }}>View</button>
+                      <button onClick={() => setSelectedInvoice(inv)} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 11 }}>View</button>
                     </td>
                   </tr>
                 );
@@ -2327,302 +3135,16 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
       {renderGroupSection("Account Customers", accountGroups, C.blue)}
       {renderGroupSection("Other Customers", otherGroups, C.muted)}
 
-      {/* Detail modal */}
       {selectedInvoice && (
-        <div onClick={() => { setSelectedInvoice(null); setDetailData(null); }} style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex",
-          alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20,
-        }}>
-          <div onClick={e => e.stopPropagation()} style={{
-            background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
-            padding: 24, maxWidth: 640, width: "100%", maxHeight: "90vh", overflowY: "auto",
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div>
-                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: C.accent }}>{selectedInvoice.invoice_number}</div>
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                {emailEnabled && (() => {
-                  const cust = customerMap[selectedInvoice.customer_id];
-                  const recipient = (cust?.accounts_email || cust?.email || "").trim();
-                  if (!recipient) {
-                    return <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>No email on customer</span>;
-                  }
-                  return (
-                    <button
-                      onClick={async () => {
-                        if (!confirm(`Send invoice ${selectedInvoice.invoice_number} to ${recipient}${emailConfig?.test_mode ? "\n\nTEST MODE: emails go to Resend sandbox, not the customer." : ""}?`)) return;
-                        try {
-                          const r = await api.sendInvoiceEmail(selectedInvoice.id);
-                          showToast(`Sent to ${r.recipient}${emailConfig?.test_mode ? " (TEST)" : ""}`);
-                        } catch (e) { showToast(e.message, "error"); }
-                      }}
-                      style={{ ...btnStyle(C.green), padding: "6px 12px", fontSize: 12 }}
-                    >
-                      Send Email
-                    </button>
-                  );
-                })()}
-                <button
-                  onClick={() => window.open(`/api/invoices/${selectedInvoice.id}/print`, "_blank")}
-                  style={{ ...btnStyle("#6b7280"), padding: "6px 12px", fontSize: 12 }}
-                >
-                  Print / PDF
-                </button>
-                <button onClick={() => { setSelectedInvoice(null); setDetailData(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>✕</button>
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Customer</div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{formatCustomerDisplay(customerMap[selectedInvoice.customer_id]) || selectedInvoice.customer_name || selectedInvoice.address || "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice Date</div>
-                <div style={{ fontSize: 13 }}>{selectedInvoice.invoice_date}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Due Date</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: selectedInvoice.due_date && selectedInvoice.due_date < new Date().toISOString().split("T")[0] && selectedInvoice.status === "open" ? C.red : C.text }}>
-                  {selectedInvoice.due_date || "—"}
-                  {selectedInvoice.due_date && selectedInvoice.due_date < new Date().toISOString().split("T")[0] && selectedInvoice.status === "open" && (
-                    <span style={{ marginLeft: 6, fontSize: 10, background: C.red, color: "#fff", borderRadius: 3, padding: "1px 5px" }}>OVERDUE</span>
-                  )}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Status</div>
-                <div>{statusBadge(selectedInvoice.status)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Subtotal (net)</div>
-                <div style={{ fontSize: 13, color: C.text }}>{fmtCurrency(selectedInvoice.total)}</div>
-                <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>+ GST {fmtCurrency(Math.round((selectedInvoice.total || 0) * 0.10 * 100) / 100)}</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginTop: 4 }}>{fmtMoney(selectedInvoice.total)} <span style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>inc GST</span></div>
-              </div>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Paid (inc GST)</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: C.green }}>{fmtMoney(selectedInvoice.amount_paid)}</div>
-                <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Outstanding (inc GST)</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: ((selectedInvoice.total || 0) - (selectedInvoice.amount_paid || 0)) > 0 ? C.red : C.muted }}>
-                  {fmtMoney((selectedInvoice.total || 0) - (selectedInvoice.amount_paid || 0))}
-                </div>
-              </div>
-            </div>
-
-            {/* Linked Orders — one section per order with its own line items */}
-            {detailData?.orderSections?.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 8 }}>Linked Orders</div>
-                {detailData.orderSections.map((section, si) => (
-                  <div key={section.order?.id || si} style={{ marginBottom: 12, background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-                    <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-                      <span style={{ fontWeight: 700, fontSize: 13, color: C.accent }}>{section.order?.order_number || "—"}</span>
-                      <span style={{ fontSize: 12, color: C.muted }}>{section.order?.order_date || ""}</span>
-                      {section.order?.order_detail && (
-                        <span style={{ fontSize: 12, color: C.text }}>{section.order.order_detail}</span>
-                      )}
-                      {section.order?.po_number && (
-                        <span style={{ fontSize: 12, color: C.muted }}>PO: {section.order.po_number}</span>
-                      )}
-                    </div>
-                    {section.lines?.length > 0 ? (
-                      <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-                        <thead>
-                          <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
-                            <th style={{ textAlign: "left", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Item</th>
-                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Qty</th>
-                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Unit Price</th>
-                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Total</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {section.lines.map((l, i) => (
-                            <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                              <td style={{ padding: "5px 10px", fontWeight: 600 }}>{l.cylinder_label || "—"}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.qty}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    ) : (
-                      <div style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>No line items</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Rental Charges section */}
-            {detailData?.rentalLines?.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Rental Charges</div>
-                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}` }}>
-                  <thead>
-                    <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
-                      <th style={{ textAlign: "left", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Cylinder</th>
-                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Qty on Hand</th>
-                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Rate</th>
-                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Charge</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detailData.rentalLines.map((l, i) => (
-                      <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                        <td style={{ padding: "5px 10px", fontWeight: 600 }}>{l.cylinder_label || l.notes || "—"}</td>
-                        <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.qty != null ? l.qty : "—"}</td>
-                        <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.unit_price != null ? fmtCurrency(l.unit_price) : "—"}</td>
-                        <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total != null ? l.line_total : l.amount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Fallback: flat line items for older invoices without orderSections */}
-            {!detailData?.orderSections?.length && !detailData?.rentalLines?.length && detailData?.lines?.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Line Items</div>
-                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", border: `1px solid ${C.border}`, borderRadius: 6 }}>
-                  <thead>
-                    <tr style={{ background: C.panel, borderBottom: `1px solid ${C.border}` }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Item</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Qty</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Unit Price</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Line Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detailData.lines.map((l, i) => (
-                      <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                        <td style={{ padding: "6px 8px", fontWeight: 600 }}>{l.cylinder_label || "—"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{l.qty}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div>
-              <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Payments</div>
-              {detailData?.payments?.length > 0 ? (
-                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                      {["Date", "Method", "Reference", "Amount"].map(h => <th key={h} style={{ textAlign: "left", padding: "4px 6px", color: C.muted }}>{h}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detailData.payments.map(p => (
-                      <tr key={p.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                        <td style={{ padding: "4px 6px" }}>{p.date}</td>
-                        <td style={{ padding: "4px 6px" }}>{p.method || "—"}</td>
-                        <td style={{ padding: "4px 6px", color: C.muted }}>{p.reference || "—"}</td>
-                        <td style={{ padding: "4px 6px", fontWeight: 600, color: C.green }}>{fmtCurrency(p.amount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <div style={{ padding: 12, color: C.muted, fontSize: 12, background: C.input, borderRadius: 6 }}>
-                  {detailData ? "No payments recorded" : "Loading..."}
-                </div>
-              )}
-
-              {/* Round 3: Record Payment form (issue 4) */}
-              {selectedInvoice.status !== "void" && (
-                <div style={{ marginTop: 12 }}>
-                  {!showPaymentForm ? (
-                    <button
-                      onClick={() => {
-                        const owed = Math.max(0, (selectedInvoice.total || 0) - (selectedInvoice.amount_paid || 0));
-                        setPaymentForm(f => ({ ...f, amount: owed > 0 ? owed.toFixed(2) : "" }));
-                        setShowPaymentForm(true);
-                      }}
-                      style={{ ...btnStyle(C.green), padding: "8px 16px", fontSize: 13 }}
-                    >
-                      + Record Payment
-                    </button>
-                  ) : (
-                    <div style={{ padding: 12, background: C.input, borderRadius: 6, border: `1px solid ${C.border}` }}>
-                      <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 8 }}>New Payment</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                        <div>
-                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Amount *</label>
-                          <input
-                            type="number" step="0.01" min="0"
-                            value={paymentForm.amount}
-                            onChange={e => setPaymentForm(f => ({ ...f, amount: e.target.value }))}
-                            style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13 }}
-                          />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Date</label>
-                          <input
-                            type="date"
-                            value={paymentForm.date}
-                            onChange={e => setPaymentForm(f => ({ ...f, date: e.target.value }))}
-                            style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13 }}
-                          />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Method</label>
-                          <select
-                            value={paymentForm.method}
-                            onChange={e => setPaymentForm(f => ({ ...f, method: e.target.value }))}
-                            style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13 }}
-                          >
-                            <option value="manual">Manual</option>
-                            <option value="cash">Cash</option>
-                            <option value="eft">EFT / Bank Transfer</option>
-                            <option value="credit_card">Credit Card</option>
-                            <option value="cheque">Cheque</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Reference</label>
-                          <input
-                            type="text"
-                            value={paymentForm.reference}
-                            onChange={e => setPaymentForm(f => ({ ...f, reference: e.target.value }))}
-                            placeholder="optional"
-                            style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13 }}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Notes</label>
-                        <input
-                          type="text"
-                          value={paymentForm.notes}
-                          onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))}
-                          placeholder="optional"
-                          style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, marginBottom: 8 }}
-                        />
-                      </div>
-                      {selectedInvoice.status === "pending" && (
-                        <div style={{ fontSize: 11, color: "#a855f7", marginBottom: 8, padding: 6, background: "#a855f722", borderRadius: 4 }}>
-                          ℹ This invoice is pending (order not yet delivered). Payment will be held as a prepayment and the order will dispatch once paid in full.
-                        </div>
-                      )}
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={recordPayment} style={{ ...btnStyle(C.green), padding: "6px 14px", fontSize: 12 }}>Save Payment</button>
-                        <button onClick={() => setShowPaymentForm(false)} style={{ ...btnStyle(C.muted), padding: "6px 14px", fontSize: 12 }}>Cancel</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <InvoiceDetailModal
+          invoiceId={selectedInvoice.id}
+          customers={customers}
+          emailEnabled={emailEnabled}
+          emailConfig={emailConfig}
+          showToast={showToast}
+          onClose={() => setSelectedInvoice(null)}
+          onPaymentRecorded={() => { load(); try { reloadCustomers && reloadCustomers(); } catch (e) {} }}
+        />
       )}
     </div>
   );
@@ -2632,14 +3154,7 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
 function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, emailConfig }) {
   const GST_RATE = 0.10;
   const [tab, setTab] = useState("history"); // history | generate
-  // Invoice detail modal (reuse the same pattern as InvoicesView)
-  const [selectedInvoice, setSelectedInvoice] = useState(null);
-  const [detailData, setDetailData] = useState(null);
-  const openInvoiceDetail = async (inv) => {
-    setSelectedInvoice(inv);
-    setDetailData(null);
-    try { const d = await api.getInvoice(inv.invoice_id || inv.id); setDetailData(d); } catch (e) { /* tolerate */ }
-  };
+  const [selectedInvoice, setSelectedInvoice] = useState(null); // for InvoiceDetailModal
 
   // 3.0.18: fallback customer fetch when parent prop is empty (same pattern as TrackingView)
   // and customer search filter for the history tab.
@@ -2841,7 +3356,7 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
                     <td style={{ padding: "4px 6px" }}>
                       {r.invoice_id ? (
                         <button
-                          onClick={() => openInvoiceDetail(r)}
+                          onClick={() => setSelectedInvoice(r)}
                           style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 11, fontWeight: 600, padding: 0 }}
                         >
                           View
@@ -3119,117 +3634,15 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
         </>
       )}
 
-      {/* Invoice detail modal — triggered from rental history "View" button */}
       {selectedInvoice && (
-        <div onClick={() => { setSelectedInvoice(null); setDetailData(null); }} style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex",
-          alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20,
-        }}>
-          <div onClick={e => e.stopPropagation()} style={{
-            background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
-            padding: 24, maxWidth: 640, width: "100%", maxHeight: "90vh", overflowY: "auto",
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div>
-                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: C.accent }}>{detailData?.invoice_number || selectedInvoice.invoice_number || "…"}</div>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {detailData && (
-                  <button onClick={() => window.open(`/api/invoices/${detailData.id}/print`, "_blank")} style={{ ...btnStyle("#6b7280"), padding: "6px 12px", fontSize: 12 }}>Print / PDF</button>
-                )}
-                <button onClick={() => { setSelectedInvoice(null); setDetailData(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>✕</button>
-              </div>
-            </div>
-            {!detailData ? (
-              <div style={{ padding: 32, textAlign: "center", color: C.muted }}>Loading…</div>
-            ) : (
-              <>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-                  <div><div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Invoice Date</div><div style={{ fontSize: 13 }}>{detailData.invoice_date}</div></div>
-                  <div>
-                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Due Date</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: detailData.due_date && detailData.due_date < new Date().toISOString().split("T")[0] && detailData.status === "open" ? C.red : C.text }}>
-                      {detailData.due_date || "—"}
-                    </div>
-                  </div>
-                  <div><div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Status</div>
-                    <div style={{ marginTop: 2 }}>
-                      <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, background: detailData.status === "paid" ? "#22c55e22" : "#f59e0b22", color: detailData.status === "paid" ? C.green : C.accent }}>{(detailData.status || "open").toUpperCase()}</span>
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Total (inc GST)</div>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>{fmtMoney(detailData.total)}</div>
-                    <div style={{ fontSize: 11, color: (detailData.total || 0) - (detailData.amount_paid || 0) > 0 ? C.red : C.green }}>
-                      Balance: {fmtMoney((detailData.total || 0) - (detailData.amount_paid || 0))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Linked Orders */}
-                {detailData.orderSections?.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Linked Orders</div>
-                    {detailData.orderSections.map((s, i) => (
-                      <div key={i} style={{ marginBottom: 8, background: C.panel, borderRadius: 6, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-                        <div style={{ padding: "6px 10px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, fontSize: 12, flexWrap: "wrap" }}>
-                          <span style={{ fontWeight: 700, color: C.accent }}>{s.order?.order_number}</span>
-                          <span style={{ color: C.muted }}>{s.order?.order_date}</span>
-                          {s.order?.po_number && <span style={{ color: C.muted }}>PO: {s.order.po_number}</span>}
-                        </div>
-                        {s.lines?.map((l, j) => (
-                          <div key={j} style={{ padding: "4px 10px", fontSize: 11, display: "flex", justifyContent: "space-between", borderBottom: `1px solid ${C.border}` }}>
-                            <span>{l.cylinder_label} × {l.qty}</span>
-                            <span style={{ fontWeight: 600 }}>{fmtCurrency(l.line_total)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Rental lines */}
-                {detailData.rentalLines?.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Rental Charges</div>
-                    <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse", background: C.panel, borderRadius: 6, border: `1px solid ${C.border}` }}>
-                      <thead><tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
-                        <th style={{ padding: "4px 8px", textAlign: "left", color: C.muted, fontWeight: 600 }}>Cylinder</th>
-                        <th style={{ padding: "4px 8px", textAlign: "right", color: C.muted, fontWeight: 600 }}>Qty</th>
-                        <th style={{ padding: "4px 8px", textAlign: "right", color: C.muted, fontWeight: 600 }}>Rate</th>
-                        <th style={{ padding: "4px 8px", textAlign: "right", color: C.muted, fontWeight: 600 }}>Charge</th>
-                      </tr></thead>
-                      <tbody>
-                        {detailData.rentalLines.map((l, i) => (
-                          <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                            <td style={{ padding: "4px 8px" }}>{l.cylinder_label}</td>
-                            <td style={{ padding: "4px 8px", textAlign: "right" }}>{l.qty}</td>
-                            <td style={{ padding: "4px 8px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
-                            <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {/* Payments */}
-                {detailData.payments?.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Payments</div>
-                    {detailData.payments.map(p => (
-                      <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0", borderBottom: `1px solid ${C.border}` }}>
-                        <span style={{ color: C.muted }}>{p.date} · {p.method}</span>
-                        <span style={{ color: C.green, fontWeight: 600 }}>{fmtCurrency(grossOf(p.amount))}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
+        <InvoiceDetailModal
+          invoiceId={selectedInvoice.invoice_id || selectedInvoice.id}
+          customers={effectiveCustomers}
+          emailEnabled={emailEnabled}
+          emailConfig={emailConfig}
+          showToast={showToast}
+          onClose={() => setSelectedInvoice(null)}
+        />
       )}
     </div>
   );
@@ -3544,8 +3957,9 @@ function CompletionHistoryPanel({ orderId, lines }) {
         </div>
       )}
 
-      {/* Per-line rows */}
-      {(lines || []).map(ln => {
+      {/* Per-line rows — rental/cylinder lines are billing artifacts that auto-follow
+           the sale line's fate; exclude them from the delivery completion record */}
+      {(lines || []).filter(ln => ln.item_type !== "cylinder").map(ln => {
         const lineTxns = byLine[ln.id] || [];
         if (lineTxns.length === 0 && !ln.delivered_qty && ln.status === "open") return null;
         return (
@@ -3579,7 +3993,7 @@ function CompletionHistoryPanel({ orderId, lines }) {
 }
 
 // ==================== ORDERS VIEW ====================
-function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pendingOrderId, onPendingOrderHandled, pendingNewOrderCustomerId, onPendingNewOrderHandled }) {
+function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pendingOrderId, onPendingOrderHandled, pendingNewOrderCustomerId, onPendingNewOrderHandled, emailEnabled, emailConfig }) {
   const [orders, setOrders] = useState([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -3588,6 +4002,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
   const [showNewCust, setShowNewCust] = useState(false);
   const [listCustomerFilter, setListCustomerFilter] = useState(""); // bottom orders list: filter by customer id
   const [custBalance, setCustBalance] = useState(null); // { balance, credit_balance, open_invoices, active_credits }
+  const [invoiceViewId, setInvoiceViewId] = useState(null); // invoice detail modal
   const emptyForm = {
     customer_id: "", address: "", customer_name: "", order_detail: "", cylinder_type_id: "",
     qty: 1, unit_price: 0, total_price: 0, notes: "",
@@ -4344,7 +4759,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
         <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {["Order #", "Date", "Customer", "PO#", "Order", "Total $", "Paid", "Due Date", "Status", "Actions"].map(h => (
+              {["Order #", "Date", "Customer", "PO#", "Order", "Total $", "Paid", "Invoice", "Due Date", "Status", "Actions"].map(h => (
                 <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
@@ -4360,6 +4775,14 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                 <td style={{ padding: "6px 8px", fontWeight: 700, color: C.green }}>{o.total_price ? fmtCurrency(o.total_price) : "—"}</td>
                 <td style={{ padding: "6px 8px" }}>
                   {o.paid ? <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#22c55e22", color: C.green }}>PAID</span> : <span style={{ color: C.muted }}>—</span>}
+                </td>
+                <td style={{ padding: "6px 8px" }}>
+                  {o.invoice_id ? (
+                    <button onClick={e => { e.stopPropagation(); setInvoiceViewId(o.invoice_id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
+                      <span style={{ color: C.accent, fontWeight: 700, fontSize: 12 }}>{o.invoice_number || "View"}</span>
+                      {o.invoice_status && <span style={{ marginLeft: 4, padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700, background: o.invoice_status === "paid" ? "#22c55e22" : o.invoice_status === "void" ? "#6b728022" : "#f59e0b22", color: o.invoice_status === "paid" ? C.green : o.invoice_status === "void" ? C.muted : C.accent }}>{o.invoice_status.toUpperCase()}</span>}
+                    </button>
+                  ) : <span style={{ color: C.muted }}>—</span>}
                 </td>
                 <td style={{ padding: "6px 8px", color: o.invoice_due_date ? C.text : C.muted }}>
                   {o.invoice_due_date || "—"}
@@ -4395,6 +4818,18 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
         </table>
         {filteredOrders.length === 0 && <div style={{ textAlign: "center", padding: 32, color: C.muted }}>No orders yet</div>}
       </div>
+
+      {invoiceViewId && (
+        <InvoiceDetailModal
+          invoiceId={invoiceViewId}
+          customers={customers}
+          emailEnabled={emailEnabled}
+          emailConfig={emailConfig}
+          showToast={showToast}
+          onClose={() => setInvoiceViewId(null)}
+          onPaymentRecorded={() => { loadOrders(); try { reloadCustomers && reloadCustomers(); } catch (e) {} }}
+        />
+      )}
     </div>
   );
 }
@@ -5105,6 +5540,8 @@ function AdministratorView({ showToast }) {
   const [loading, setLoading] = useState(true);
   const [rentalStatus, setRentalStatus] = useState(null);
   const [rentalBusy, setRentalBusy] = useState(false);
+  const [billingSchedule, setBillingSchedule] = useState({ billing_weekly_day: "5", billing_monthly_day: "last" });
+  const [billingScheduleSaving, setBillingScheduleSaving] = useState(false);
 
   // Customer import state
   const [importFileName, setImportFileName] = useState("");
@@ -5244,8 +5681,19 @@ function AdministratorView({ showToast }) {
   };
 
   useEffect(() => {
-    api.getSettings().then(s => { setSettings(s || {}); setLoading(false); }).catch(e => { showToast(e.message, "error"); setLoading(false); });
+    Promise.all([api.getSettings(), api.getBillingSchedule()])
+      .then(([s, bs]) => { setSettings(s || {}); setBillingSchedule(bs || { billing_weekly_day: "5", billing_monthly_day: "last" }); setLoading(false); })
+      .catch(e => { showToast(e.message, "error"); setLoading(false); });
   }, []);
+
+  const saveBillingSchedule = async () => {
+    setBillingScheduleSaving(true);
+    try {
+      await api.updateBillingSchedule(billingSchedule);
+      showToast("Billing schedule saved");
+    } catch (e) { showToast(e.message, "error"); }
+    finally { setBillingScheduleSaving(false); }
+  };
 
   const update = (key, value) => setSettings(p => ({ ...p, [key]: value }));
 
@@ -5430,6 +5878,57 @@ function AdministratorView({ showToast }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <SeqEditor title="Customer Number Sequence" prefixKey="customer_seq_prefix" paddingKey="customer_seq_padding" nextKey="customer_seq_next" />
         <SeqEditor title="Order Number Sequence" prefixKey="order_seq_prefix" paddingKey="order_seq_padding" nextKey="order_seq_next" />
+      </div>
+
+      {/* Billing Schedule */}
+      <div style={{ marginTop: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700 }}>Billing Schedule</h3>
+          <button onClick={saveBillingSchedule} disabled={billingScheduleSaving} style={{ ...btnStyle(C.green), opacity: billingScheduleSaving ? 0.6 : 1, padding: "5px 14px", fontSize: 12 }}>
+            {billingScheduleSaving ? "Saving…" : "Save Schedule"}
+          </button>
+        </div>
+        <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
+          Controls <em>when</em> the billing cycle lands after each run. Weekly and fortnightly billing always fires on the configured day of week. Monthly/quarterly billing fires on a specific day of the month or the last calendar day.
+        </div>
+        <Card>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div>
+              <label style={labelStyle}>Weekly &amp; Fortnightly billing day</label>
+              <select value={billingSchedule.billing_weekly_day}
+                onChange={e => setBillingSchedule(p => ({ ...p, billing_weekly_day: e.target.value }))}
+                style={inputStyle}>
+                <option value="1">Monday</option>
+                <option value="2">Tuesday</option>
+                <option value="3">Wednesday</option>
+                <option value="4">Thursday</option>
+                <option value="5">Friday (default)</option>
+                <option value="6">Saturday</option>
+              </select>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                After each weekly or fortnightly run, the next billing date is set to the next occurrence of this day.
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>Monthly &amp; Quarterly billing day</label>
+              <select value={billingSchedule.billing_monthly_day}
+                onChange={e => setBillingSchedule(p => ({ ...p, billing_monthly_day: e.target.value }))}
+                style={inputStyle}>
+                <option value="last">Last day of month (default)</option>
+                {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
+                  <option key={d} value={String(d)}>{d === 1 ? "1st" : d === 2 ? "2nd" : d === 3 ? "3rd" : `${d}th`} of the month</option>
+                ))}
+              </select>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                After each monthly or quarterly run, the next billing date is set to this day in the following period. Days 29–31 are avoided to prevent month-end issues.
+              </div>
+            </div>
+          </div>
+          <div style={{ marginTop: 14, padding: "10px 12px", background: C.input, borderRadius: 6, fontSize: 12, color: C.muted }}>
+            <strong style={{ color: C.text }}>How it works: </strong>
+            The scheduler runs every 6 hours and bills any commercial account customer whose <em>next invoice date</em> or <em>next rental billing date</em> has been reached. After billing, those dates are automatically advanced to the next period using the rules above. You can override any customer's next billing date directly in their customer record.
+          </div>
+        </Card>
       </div>
 
       {/* Rental cycle controls */}
@@ -5872,8 +6371,8 @@ export default function App() {
   const renderView = () => {
     switch (view) {
       case "dashboard": return <DashboardView stats={stats.data} />;
-      case "orders": return <OrdersView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingOrderId={pendingOrderId} onPendingOrderHandled={() => setPendingOrderId(null)} pendingNewOrderCustomerId={pendingNewOrderCustomerId} onPendingNewOrderHandled={() => setPendingNewOrderCustomerId(null)} />;
-      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId, customerId) => { if (orderId) { setPendingOrderId(orderId); } else { setPendingNewOrderCustomerId(customerId); } setView("orders"); }} cylinderTypes={cylinderTypes.data || []} userRole={user?.role} />;
+      case "orders": return <OrdersView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingOrderId={pendingOrderId} onPendingOrderHandled={() => setPendingOrderId(null)} pendingNewOrderCustomerId={pendingNewOrderCustomerId} onPendingNewOrderHandled={() => setPendingNewOrderCustomerId(null)} emailEnabled={emailEnabled} emailConfig={emailConfig} />;
+      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId, customerId) => { if (orderId) { setPendingOrderId(orderId); } else { setPendingNewOrderCustomerId(customerId); } setView("orders"); }} cylinderTypes={cylinderTypes.data || []} userRole={user?.role} emailEnabled={emailEnabled} emailConfig={emailConfig} />;
       case "cylindertypes": return <CylinderTypesView cylinderTypes={cylinderTypes.data} reload={cylinderTypes.reload} showToast={showToast} />;
       case "delivery": return <DeliveryView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} refreshAll={refreshAll} />;
       case "tracking": return <TrackingView customers={customers.data} cylinderTypes={cylinderTypes.data} />;

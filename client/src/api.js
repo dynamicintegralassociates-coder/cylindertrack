@@ -37,6 +37,7 @@ const api = {
   updateCustomer: (id, data) => request(`/customers/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteCustomer: (id) => request(`/customers/${id}`, { method: "DELETE" }),
   getCustomerOrders: (id) => request(`/customers/${id}/orders`),
+  getCustomerOnHand: (id) => request(`/customers/${id}/on-hand`),
   getLastSalePrice: (id) => request(`/customers/${id}/last-sale-price`),
   importCustomers: (rows) => request("/admin/customers/import", { method: "POST", body: JSON.stringify({ rows }) }),
   revealCC: (id) => request(`/customers/${id}/reveal-cc`),
@@ -132,6 +133,14 @@ const api = {
 
   // Customer balance
   getCustomerBalance: (id) => request(`/customers/${id}/balance`),
+
+  // Account Statement
+  getCustomerStatement: (id, fromDate, toDate) =>
+    request(`/customers/${id}/statement?from_date=${encodeURIComponent(fromDate)}&to_date=${encodeURIComponent(toDate)}`),
+  getCustomerStatementPdfUrl: (id, fromDate, toDate) =>
+    `/api/customers/${id}/statement/pdf?from_date=${encodeURIComponent(fromDate)}&to_date=${encodeURIComponent(toDate)}`,
+  emailStatement: (id, fromDate, toDate, recipientOverride) =>
+    request(`/customers/${id}/statement/email`, { method: "POST", body: JSON.stringify({ from_date: fromDate, to_date: toDate, recipient_override: recipientOverride || null }) }),
   recalculateAllBalances: () => request("/customers/recalculate-balances", { method: "POST" }),
 
   // Credit notes
@@ -149,6 +158,8 @@ const api = {
   // Settings
   getSettings: () => request("/settings"),
   updateSettings: (data) => request("/settings", { method: "PUT", body: JSON.stringify(data) }),
+  getBillingSchedule: () => request("/settings/billing-schedule"),
+  updateBillingSchedule: (data) => request("/settings/billing-schedule", { method: "PUT", body: JSON.stringify(data) }),
 
   // Audit log (admin only)
   getAuditLog: (params) => {
