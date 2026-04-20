@@ -14,6 +14,28 @@ const PORT = process.env.PORT || 3001;
 // Initialize database
 const db = initDB();
 
+// ── Recovery: if RECOVERY_PASSWORD is set, reset (or create) the admin account ──
+// Set this env var in Railway, deploy once to regain access, then remove it.
+if (process.env.RECOVERY_PASSWORD) {
+  try {
+    const bcrypt = require("bcryptjs");
+    const crypto = require("crypto");
+    const hash = bcrypt.hashSync(process.env.RECOVERY_PASSWORD, 10);
+    const existing = db.prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY rowid LIMIT 1").get();
+    if (existing) {
+      db.prepare("UPDATE users SET password = ? WHERE id = ?").run(hash, existing.id);
+      const uname = db.prepare("SELECT username FROM users WHERE id = ?").get(existing.id).username;
+      console.log(`[recovery] Admin password reset for user: ${uname}`);
+    } else {
+      const id = crypto.randomBytes(16).toString("hex");
+      db.prepare("INSERT INTO users (id, username, password, role) VALUES (?, 'admin', ?, 'admin')").run(id, hash);
+      console.log("[recovery] No admin found — created user: admin");
+    }
+  } catch (e) {
+    console.error("[recovery] Failed:", e.message);
+  }
+}
+
 // Middleware
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "50mb" }));
