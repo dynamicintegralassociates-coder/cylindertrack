@@ -352,7 +352,7 @@ module.exports = function createRoutes(db) {
         rental_frequency, customer_type, customer_type_start, customer_type_end, rep_name, payment_terms, customer_category,
         chain, alternative_contact_name, alternative_contact_phone, compliance_not_required, invoice_frequency,
         next_invoice_date, next_rental_date
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id, (name || "").trim(), contact || "", phone || "", email || "", address || "", notes || "",
       onedrive_link || "", payment_ref || "", ccEnc, account_customer ? 1 : 0,
