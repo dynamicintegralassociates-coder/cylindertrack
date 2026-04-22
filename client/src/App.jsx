@@ -4216,6 +4216,8 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
   const [listCustomerFilter, setListCustomerFilter] = useState(""); // bottom orders list: filter by customer id
   const [custBalance, setCustBalance] = useState(null); // { balance, credit_balance, open_invoices, active_credits }
   const [invoiceViewId, setInvoiceViewId] = useState(null); // invoice detail modal
+  const [createdPaymentLink, setCreatedPaymentLink] = useState(null); // { invoiceId, url } after order creation
+  const [paymentLinkLoading, setPaymentLinkLoading] = useState(false);
   const emptyForm = {
     customer_id: "", address: "", customer_name: "", order_detail: "", cylinder_type_id: "",
     qty: 1, unit_price: 0, total_price: 0, notes: "",
@@ -4467,7 +4469,11 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
         } else {
           showToast("Order created");
         }
-        setCreating(false);
+        if (r?.invoice_id) {
+          setCreatedPaymentLink({ invoiceId: r.invoice_id, url: null });
+        } else {
+          setCreating(false);
+        }
       }
       setForm({ ...emptyForm });
       setPriceLines([]);
@@ -4551,6 +4557,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
   const cancelEdit = () => {
     setEditing(null);
     setCreating(false);
+    setCreatedPaymentLink(null);
     setForm({ ...emptyForm });
     setPriceLines([]);
     setShowLineEditor(false);
@@ -5023,8 +5030,6 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
               {(() => {
                 if (!editing) return "Create Order";
                 const o = orders.find(o => o.id === editing);
-                // 3.0.11: Once an order is past delivered/invoiced/paid, syncing back to
-                // Optimo doesn't make sense — the work is already done. Just show "Save Order".
                 const lockedFromOptimo = o && ["delivered", "invoiced", "closed", "cancelled"].includes(o.status);
                 if (o?.optimoroute_id && !lockedFromOptimo) return "Save & Sync to OptimoRoute";
                 return "Save Order";
@@ -5032,6 +5037,47 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
             </button>
             {editing && <button onClick={cancelEdit} style={btnStyle(C.muted)}>Cancel</button>}
           </div>
+
+          {/* Payment link banner — shown after order creation when an invoice was generated */}
+          {createdPaymentLink && (
+            <div style={{ marginTop: 12, padding: "12px 14px", background: C.input, borderRadius: 8, border: `1px solid ${C.border}` }}>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Order created ✓</div>
+              {createdPaymentLink.url ? (
+                <div>
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Share this link with the customer to pay online:</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <input readOnly value={createdPaymentLink.url} style={{ ...inputStyle, flex: 1, fontSize: 11, color: C.blue }} onClick={e => e.target.select()} />
+                    <button onClick={() => { navigator.clipboard?.writeText(createdPaymentLink.url); showToast("Payment link copied!"); }}
+                      style={{ ...btnStyle(C.blue), padding: "6px 14px", fontSize: 12 }}>Copy Link</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: C.muted }}>Invoice generated — share a payment link with the customer:</span>
+                  <button onClick={async () => {
+                    setPaymentLinkLoading(true);
+                    try {
+                      const r = await api.createStripeCheckout(createdPaymentLink.invoiceId);
+                      setCreatedPaymentLink(p => ({ ...p, url: r.checkout_url }));
+                      navigator.clipboard?.writeText(r.checkout_url);
+                      showToast("Payment link copied to clipboard");
+                    } catch (e) { showToast(e.message, "error"); }
+                    finally { setPaymentLinkLoading(false); }
+                  }} disabled={paymentLinkLoading} style={{ ...btnStyle(C.blue), padding: "6px 14px", fontSize: 12 }}>
+                    {paymentLinkLoading ? "Generating…" : "Generate Pay Link"}
+                  </button>
+                  <button onClick={() => { setCreatedPaymentLink(null); setCreating(false); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>
+                    Skip
+                  </button>
+                </div>
+              )}
+              {createdPaymentLink.url && (
+                <button onClick={() => { setCreatedPaymentLink(null); setCreating(false); }} style={{ marginTop: 10, background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>
+                  Done — close form
+                </button>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
@@ -7301,6 +7347,8 @@ function EasyOrderView({ customers, showToast, reloadCustomers, pendingCustomerI
   const [extraRows, setExtraRows] = useState([]); // manually added lines: { uid, cylinder_type_id, label, price, order_qty, return_qty, return_other_qty }
   const [addItemSelect, setAddItemSelect] = useState("");
   const [submitError, setSubmitError] = useState("");
+  const [easyPayLink, setEasyPayLink] = useState(null); // { invoiceId, url } after submission
+  const [easyPayLinkLoading, setEasyPayLinkLoading] = useState(false);
   const searchRef = useRef(null);
 
   // Focus search on mount
@@ -7366,6 +7414,7 @@ function EasyOrderView({ customers, showToast, reloadCustomers, pendingCustomerI
     setExtraRows([]);
     setAddItemSelect("");
     setSubmitError("");
+    setEasyPayLink(null);
   };
 
   const updateRow = (typeId, field, val) => {
@@ -7435,6 +7484,7 @@ function EasyOrderView({ customers, showToast, reloadCustomers, pendingCustomerI
 
     setSubmitError("");
     const pmtAmt = parseFloat(paymentAmount) || 0;
+    let firstInvoiceId = null;
 
     setSubmitting(true);
     try {
@@ -7460,6 +7510,7 @@ function EasyOrderView({ customers, showToast, reloadCustomers, pendingCustomerI
         } else {
           showToast("Order created");
         }
+        if (result?.invoice_id) firstInvoiceId = result.invoice_id;
       }
 
       for (const r of returnItems) {
@@ -7493,7 +7544,11 @@ function EasyOrderView({ customers, showToast, reloadCustomers, pendingCustomerI
       if (!hasOrderLines && hasReturns) showToast("Returns recorded");
 
       reloadCustomers();
-      closeModal();
+      if (firstInvoiceId) {
+        setEasyPayLink({ invoiceId: firstInvoiceId, url: null });
+      } else {
+        closeModal();
+      }
     } catch (e) {
       console.error("[EasyOrder] submit failed:", e);
       setSubmitError(e.message || "Submission failed — check console for details.");
@@ -7543,11 +7598,60 @@ function EasyOrderView({ customers, showToast, reloadCustomers, pendingCustomerI
             </button>
           </div>
 
+          {/* Payment link success panel — shown after order submission */}
+          {easyPayLink && (
+            <div style={{ background: "#22c55e18", border: `1px solid ${C.green}`, borderRadius: 8, padding: 20, marginBottom: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: C.green, marginBottom: 10 }}>Order submitted!</div>
+              {!easyPayLink.url ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 13, color: C.text }}>Generate a Stripe payment link for this invoice?</span>
+                  <button
+                    disabled={easyPayLinkLoading}
+                    onClick={async () => {
+                      setEasyPayLinkLoading(true);
+                      try {
+                        const r = await api.createStripeCheckout(easyPayLink.invoiceId);
+                        setEasyPayLink(prev => ({ ...prev, url: r.url }));
+                      } catch (e) {
+                        showToast(e.message || "Stripe error", "error");
+                      } finally {
+                        setEasyPayLinkLoading(false);
+                      }
+                    }}
+                    style={btnStyle(C.blue)}
+                  >
+                    {easyPayLinkLoading ? "Generating…" : "Generate Pay Link"}
+                  </button>
+                  <button onClick={closeModal} style={btnStyle(C.muted)}>Skip &amp; Close</button>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>Payment link ready — share this with your customer:</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <input
+                      readOnly
+                      value={easyPayLink.url}
+                      style={{ ...inputStyle, flex: 1, minWidth: 200, color: C.blue, fontSize: 12 }}
+                      onFocus={e => e.target.select()}
+                    />
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(easyPayLink.url); showToast("Copied!"); }}
+                      style={btnStyle(C.blue)}
+                    >
+                      Copy Link
+                    </button>
+                    <button onClick={closeModal} style={btnStyle(C.green)}>Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {prepLoading && (
             <div style={{ color: C.muted, textAlign: "center", padding: "40px 0" }}>Loading…</div>
           )}
 
-          {prepData && (
+          {prepData && !easyPayLink && (
             <>
               {/* Top row: PO # + Schedule Date */}
               <div style={{ display: "flex", gap: 14, marginBottom: 16, flexWrap: "wrap" }}>
