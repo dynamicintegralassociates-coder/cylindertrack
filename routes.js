@@ -6222,6 +6222,16 @@ function runDueRentals(db) {
 function billCommercialAccount(db, cust, mode) {
   const today = new Date().toISOString().split("T")[0];
 
+  // Same-day duplicate guard for force modes: if we already created a rental invoice
+  // for this customer today, refuse to create another. Matches billCustomerRental behaviour.
+  if (mode === "force" || mode === "force-rental") {
+    const sameDayRental = db.prepare(
+      `SELECT COUNT(*) as c FROM transactions
+       WHERE customer_id = ? AND type = 'rental_invoice' AND date = ? AND source = 'auto_rental'`
+    ).get(cust.id, today).c;
+    if (sameDayRental > 0) return { invoicesCreated: 0, transactionsCreated: 0 };
+  }
+
   const rentalDue = (mode === "force" || mode === "force-rental") ||
     (cust.rental_frequency && cust.next_rental_date && cust.next_rental_date <= today);
   const invoiceDue = (mode === "force" || mode === "force-sales") ||
@@ -6326,7 +6336,7 @@ function billCommercialAccount(db, cust, mode) {
 
   if (freqMatch && rentalDue && invoiceDue) {
     // ── Case A: frequencies match → one combined invoice ─────────────────────
-    const billDate = cust.next_rental_date || today;
+    const billDate = (mode === "force" || mode === "force-rental") ? today : (cust.next_rental_date || today);
     const rentalCharges = computeRentalCharges(billDate);
     const pendingOrders = getPendingOrders();
     const salesTotal = computeOrdersTotal(pendingOrders);
@@ -6348,7 +6358,7 @@ function billCommercialAccount(db, cust, mode) {
   } else {
     // ── Case B: different frequencies → separate invoices ────────────────────
     if (rentalDue) {
-      const billDate = cust.next_rental_date || today;
+      const billDate = (mode === "force" || mode === "force-rental") ? today : (cust.next_rental_date || today);
       const rentalCharges = computeRentalCharges(billDate);
       if (rentalCharges.total > 0) {
         const { txCount } = createInvoice(
@@ -6363,7 +6373,7 @@ function billCommercialAccount(db, cust, mode) {
     }
 
     if (invoiceDue) {
-      const billDate = cust.next_invoice_date || today;
+      const billDate = (mode === "force" || mode === "force-sales") ? today : (cust.next_invoice_date || today);
       const pendingOrders = getPendingOrders();
       const salesTotal = computeOrdersTotal(pendingOrders);
       if (salesTotal > 0 || pendingOrders.length > 0) {
