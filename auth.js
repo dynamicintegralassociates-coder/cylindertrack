@@ -79,6 +79,9 @@ module.exports = function createAuth(db) {
         });
         return res.status(401).json({ error: "Invalid credentials" });
       }
+      if (user.active === 0) {
+        return res.status(403).json({ error: "This account has been deactivated. Contact your administrator." });
+      }
       const token = uid();
       db.prepare("INSERT INTO sessions (token, user_id) VALUES (?, ?)").run(token, user.id);
       logAudit(db, { ...req, user: { id: user.id, username: user.username, role: user.role } }, {
@@ -166,8 +169,65 @@ module.exports = function createAuth(db) {
 
   // List users (admin only)
   router.get("/auth/users", requireAuth(db), (req, res) => {
-    const users = db.prepare("SELECT id, username, role, created FROM users ORDER BY created").all();
+    const users = db.prepare("SELECT id, username, role, active, created FROM users ORDER BY created").all();
     res.json(users);
+  });
+
+  // Update user — change username and/or role (admin only)
+  router.put("/auth/users/:id", requireAuth(db), (req, res) => {
+    const token = req.cookies?.ct_session;
+    const session = db.prepare("SELECT s.user_id, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?").get(token);
+    if (session?.role !== "admin") return res.status(403).json({ error: "Admin only" });
+    const { username, role } = req.body || {};
+    const target = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    // Prevent removing last admin
+    if (target.role === "admin" && role === "user") {
+      const adminCount = db.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND active = 1").get().c;
+      if (adminCount <= 1) return res.status(400).json({ error: "Cannot remove the last admin" });
+    }
+    const newUsername = (username || target.username).trim().toLowerCase();
+    const newRole = role || target.role;
+    if (newUsername !== target.username) {
+      const clash = db.prepare("SELECT id FROM users WHERE username = ? AND id != ?").get(newUsername, target.id);
+      if (clash) return res.status(400).json({ error: "Username already taken" });
+    }
+    db.prepare("UPDATE users SET username = ?, role = ? WHERE id = ?").run(newUsername, newRole, target.id);
+    logAudit(db, req, {
+      action: "update",
+      table: "users",
+      record_id: target.id,
+      before: { username: target.username, role: target.role },
+      after: { username: newUsername, role: newRole },
+      summary: `Admin updated user ${target.username}: role ${target.role}→${newRole}, username →${newUsername}`,
+    });
+    res.json({ success: true });
+  });
+
+  // Activate / deactivate a user (admin only, cannot deactivate self)
+  router.patch("/auth/users/:id/active", requireAuth(db), (req, res) => {
+    const token = req.cookies?.ct_session;
+    const session = db.prepare("SELECT s.user_id, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?").get(token);
+    if (session?.role !== "admin") return res.status(403).json({ error: "Admin only" });
+    if (session.user_id === req.params.id) return res.status(400).json({ error: "Cannot deactivate your own account" });
+    const target = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    const active = req.body?.active === false || req.body?.active === 0 ? 0 : 1;
+    // Prevent deactivating last admin
+    if (active === 0 && target.role === "admin") {
+      const adminCount = db.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND active = 1").get().c;
+      if (adminCount <= 1) return res.status(400).json({ error: "Cannot deactivate the last admin" });
+    }
+    db.prepare("UPDATE users SET active = ? WHERE id = ?").run(active, target.id);
+    // Kill existing sessions for deactivated user
+    if (active === 0) db.prepare("DELETE FROM sessions WHERE user_id = ?").run(target.id);
+    logAudit(db, req, {
+      action: active ? "activate" : "deactivate",
+      table: "users",
+      record_id: target.id,
+      summary: `Admin ${active ? "activated" : "deactivated"} user: ${target.username}`,
+    });
+    res.json({ success: true });
   });
 
   return router;

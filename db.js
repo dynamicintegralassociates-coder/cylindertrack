@@ -23,6 +23,8 @@ function initDB() {
     )
   `);
 
+  try { db.exec("ALTER TABLE users ADD COLUMN active INTEGER DEFAULT 1"); } catch(e) { /* exists */ }
+
   // --- SESSIONS ---
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (

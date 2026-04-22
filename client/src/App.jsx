@@ -7074,49 +7074,163 @@ function EmailLogSection({ showToast }) {
 
 function UsersView({ showToast }) {
   const users = useApi(() => api.getUsers());
-  const [form, setForm] = useState({ username: "", password: "", role: "user" });
+  const [addForm, setAddForm] = useState({ username: "", password: "", role: "user" });
   const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [editForm, setEditForm] = useState({ username: "", role: "user" });
+  const [pwdId, setPwdId] = useState(null);
+  const [newPwd, setNewPwd] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const addUser = async () => {
+    setBusy(true);
     try {
-      await api.addUser(form.username, form.password, form.role);
+      await api.addUser(addForm.username, addForm.password, addForm.role);
       users.reload();
-      setForm({ username: "", password: "", role: "user" });
+      setAddForm({ username: "", password: "", role: "user" });
       setAdding(false);
       showToast("User added");
     } catch (e) { showToast(e.message, "error"); }
+    finally { setBusy(false); }
   };
+
+  const startEdit = (u) => {
+    setEditId(u.id);
+    setEditForm({ username: u.username, role: u.role });
+    setPwdId(null);
+  };
+
+  const saveEdit = async () => {
+    setBusy(true);
+    try {
+      await api.updateUser(editId, editForm);
+      users.reload();
+      setEditId(null);
+      showToast("User updated");
+    } catch (e) { showToast(e.message, "error"); }
+    finally { setBusy(false); }
+  };
+
+  const savePassword = async (userId) => {
+    if (!newPwd || newPwd.length < 4) { showToast("Password must be at least 4 characters", "error"); return; }
+    setBusy(true);
+    try {
+      await api.changePassword(userId, newPwd);
+      setPwdId(null);
+      setNewPwd("");
+      showToast("Password changed");
+    } catch (e) { showToast(e.message, "error"); }
+    finally { setBusy(false); }
+  };
+
+  const toggleActive = async (u) => {
+    const action = u.active === 0 ? "activate" : "deactivate";
+    if (!confirm(`${action === "deactivate" ? "Deactivate" : "Reactivate"} user "${u.username}"?`)) return;
+    setBusy(true);
+    try {
+      await api.setUserActive(u.id, u.active === 0 ? true : false);
+      users.reload();
+      showToast(`User ${action}d`);
+    } catch (e) { showToast(e.message, "error"); }
+    finally { setBusy(false); }
+  };
+
+  const thStyle = { textAlign: "left", padding: "8px 10px", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase" };
+  const tdStyle = { padding: "10px", verticalAlign: "top" };
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <h2 style={{ fontSize: 20, fontWeight: 700 }}>Manage Users</h2>
-        <button onClick={() => setAdding(!adding)} style={btnStyle()}>{adding ? "Cancel" : "+ Add User"}</button>
+        <button onClick={() => { setAdding(!adding); setEditId(null); setPwdId(null); }} style={btnStyle()}>{adding ? "Cancel" : "+ Add User"}</button>
       </div>
+
       {adding && (
         <Card style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", gap: 12 }}>
-            <input placeholder="Username" value={form.username} onChange={e => setForm(p => ({ ...p, username: e.target.value }))} style={inputStyle} />
-            <input placeholder="Password" type="password" value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} style={inputStyle} />
-            <select value={form.role} onChange={e => setForm(p => ({ ...p, role: e.target.value }))} style={{ ...inputStyle, width: 120 }}>
+          <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>New User</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input placeholder="Username" value={addForm.username} onChange={e => setAddForm(p => ({ ...p, username: e.target.value }))} style={{ ...inputStyle, flex: 1, minWidth: 140 }} />
+            <input placeholder="Password" type="password" value={addForm.password} onChange={e => setAddForm(p => ({ ...p, password: e.target.value }))} style={{ ...inputStyle, flex: 1, minWidth: 140 }} />
+            <select value={addForm.role} onChange={e => setAddForm(p => ({ ...p, role: e.target.value }))} style={{ ...inputStyle, width: 110 }}>
               <option value="user">User</option>
               <option value="admin">Admin</option>
             </select>
-            <button onClick={addUser} style={btnStyle(C.green)}>Add</button>
+            <button onClick={addUser} disabled={busy || !addForm.username || !addForm.password} style={btnStyle(C.green)}>Add User</button>
           </div>
         </Card>
       )}
+
       <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-        <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-          {["Username", "Role", "Created"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px", color: C.muted }}>{h}</th>)}
-        </tr></thead>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${C.border}`, background: C.panel }}>
+            {["Username", "Role", "Status", "Created", "Actions"].map(h => <th key={h} style={thStyle}>{h}</th>)}
+          </tr>
+        </thead>
         <tbody>
           {(users.data || []).map(u => (
-            <tr key={u.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-              <td style={{ padding: "8px", fontWeight: 600 }}>{u.username}</td>
-              <td style={{ padding: "8px" }}><span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: u.role === "admin" ? "#f59e0b22" : "#3b82f622", color: u.role === "admin" ? C.accent : C.blue }}>{u.role}</span></td>
-              <td style={{ padding: "8px", color: C.muted }}>{u.created}</td>
-            </tr>
+            <React.Fragment key={u.id}>
+              <tr style={{ borderBottom: editId === u.id || pwdId === u.id ? "none" : `1px solid ${C.border}`, opacity: u.active === 0 ? 0.55 : 1 }}>
+                <td style={{ ...tdStyle, fontWeight: 600 }}>{u.username}</td>
+                <td style={tdStyle}>
+                  <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: u.role === "admin" ? "#f59e0b22" : "#3b82f622", color: u.role === "admin" ? C.accent : C.blue }}>{u.role}</span>
+                </td>
+                <td style={tdStyle}>
+                  {u.active === 0
+                    ? <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: "#ef444422", color: C.red }}>Inactive</span>
+                    : <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: "#22c55e22", color: C.green }}>Active</span>}
+                </td>
+                <td style={{ ...tdStyle, color: C.muted }}>{(u.created || "").split("T")[0]}</td>
+                <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
+                  <button onClick={() => { setEditId(editId === u.id ? null : u.id); setPwdId(null); setEditForm({ username: u.username, role: u.role }); }}
+                    style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 12, marginRight: 10 }}>
+                    {editId === u.id ? "Cancel" : "Edit"}
+                  </button>
+                  <button onClick={() => { setPwdId(pwdId === u.id ? null : u.id); setEditId(null); setNewPwd(""); }}
+                    style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, marginRight: 10 }}>
+                    {pwdId === u.id ? "Cancel" : "Change Password"}
+                  </button>
+                  <button onClick={() => toggleActive(u)} disabled={busy}
+                    style={{ background: "none", border: "none", color: u.active === 0 ? C.green : C.red, cursor: "pointer", fontSize: 12 }}>
+                    {u.active === 0 ? "Reactivate" : "Deactivate"}
+                  </button>
+                </td>
+              </tr>
+
+              {editId === u.id && (
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td colSpan={5} style={{ padding: "0 10px 12px" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", background: C.input, borderRadius: 6 }}>
+                      <div>
+                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600, display: "block", marginBottom: 3 }}>Username</label>
+                        <input value={editForm.username} onChange={e => setEditForm(p => ({ ...p, username: e.target.value }))} style={{ ...inputStyle, width: 180 }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600, display: "block", marginBottom: 3 }}>Role</label>
+                        <select value={editForm.role} onChange={e => setEditForm(p => ({ ...p, role: e.target.value }))} style={{ ...inputStyle, width: 120 }}>
+                          <option value="user">User</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      </div>
+                      <button onClick={saveEdit} disabled={busy} style={{ ...btnStyle(C.green), alignSelf: "flex-end" }}>Save</button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+
+              {pwdId === u.id && (
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td colSpan={5} style={{ padding: "0 10px 12px" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", background: C.input, borderRadius: 6 }}>
+                      <div>
+                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600, display: "block", marginBottom: 3 }}>New Password</label>
+                        <input type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)} placeholder="Min 4 characters" style={{ ...inputStyle, width: 220 }} />
+                      </div>
+                      <button onClick={() => savePassword(u.id)} disabled={busy || newPwd.length < 4} style={{ ...btnStyle(C.green), alignSelf: "flex-end" }}>Set Password</button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
           ))}
         </tbody>
       </table>

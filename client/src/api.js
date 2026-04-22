@@ -31,6 +31,8 @@ const api = {
   getUsers: () => request("/auth/users"),
   addUser: (username, password, role) => request("/auth/add-user", { method: "POST", body: JSON.stringify({ username, password, role }) }),
   changePassword: (userId, newPassword) => request("/auth/change-password", { method: "POST", body: JSON.stringify({ userId, newPassword }) }),
+  updateUser: (id, data) => request(`/auth/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  setUserActive: (id, active) => request(`/auth/users/${id}/active`, { method: "PATCH", body: JSON.stringify({ active }) }),
 
   // Customers
   getCustomers: (params) => request(`/customers${params?.include_archived ? "?include_archived=1" : ""}`),
