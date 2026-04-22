@@ -397,6 +397,16 @@ function drawPage1(doc, data, M, W) {
     doc.fontSize(13).font("Helvetica-Bold").fillColor(COLORS.accent);
     doc.text(fmtMoneyRaw(trio[i][1]), bx + 10, y + 20, { width: trioW - 20 });
   }
+  y += 60;
+
+  // Statement notes (if set in admin settings)
+  const stmtNotes = (data.settings.statement_notes || "").trim();
+  if (stmtNotes) {
+    doc.rect(M, y, W, 1).fill(COLORS.light);
+    y += 8;
+    doc.fontSize(8).font("Helvetica").fillColor(COLORS.muted);
+    doc.text(stmtNotes, M, y, { width: W });
+  }
 }
 
 // ── Transaction Detail Pages ──────────────────────────────────────────────────

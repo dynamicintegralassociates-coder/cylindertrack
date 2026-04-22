@@ -187,6 +187,8 @@ function initDB() {
   // 3.0.10: For 'return_other' transactions, store the foreign company name (e.g. "BOC", "Coregas")
   // who actually owns the cylinder we picked up. Empty for normal delivery/return rows.
   try { db.exec("ALTER TABLE transactions ADD COLUMN foreign_owner TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  // Link rental invoice transactions to their parent invoice (fixes multi-invoice-same-date query ambiguity)
+  try { db.exec("ALTER TABLE transactions ADD COLUMN invoice_id TEXT DEFAULT ''"); } catch(e) { /* exists */ }
 
   // --- CUSTOMER PRICING (with price history + fixed price contracts) ---
   db.exec(`
@@ -244,6 +246,9 @@ function initDB() {
   // Stripe payment link columns
   try { db.exec("ALTER TABLE invoices ADD COLUMN stripe_checkout_id TEXT DEFAULT ''"); } catch(e) { /* exists */ }
   try { db.exec("ALTER TABLE invoices ADD COLUMN stripe_checkout_url TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+
+  // Stripe Customer ID — stored on customer so repeated checkouts reuse the same Stripe customer
+  try { db.exec("ALTER TABLE customers ADD COLUMN stripe_customer_id TEXT DEFAULT ''"); } catch(e) { /* exists */ }
 
   // --- PAYMENTS ---
   db.exec(`

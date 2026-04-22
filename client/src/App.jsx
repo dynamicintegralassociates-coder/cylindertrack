@@ -2737,7 +2737,8 @@ function RentalSchedulerControls({ customers, showToast, onComplete }) {
 function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, showToast, onClose, onPaymentRecorded }) {
   const today = new Date().toISOString().split("T")[0];
   const [invoice, setInvoice] = useState(null);
-  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  // payMode: null | "choose" | "manual" | "stripe"
+  const [payMode, setPayMode] = useState(null);
   const [paymentForm, setPaymentForm] = useState({ amount: "", method: "manual", reference: "", date: today, notes: "" });
   const [stripeLoading, setStripeLoading] = useState(false);
 
@@ -2751,7 +2752,7 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
     if (!invoiceId) return;
     let active = true;
     setInvoice(null);
-    setShowPaymentForm(false);
+    setPayMode(null);
     setPaymentForm({ amount: "", method: "manual", reference: "", date: today, notes: "" });
     api.getInvoice(invoiceId).then(d => { if (active) setInvoice(d); }).catch(() => {});
     return () => { active = false; };
@@ -2773,7 +2774,7 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
       showToast(msg, r?.push_attempted && !r.push_success ? "error" : "success");
       const updated = await api.getInvoice(invoiceId);
       setInvoice(updated);
-      setShowPaymentForm(false);
+      setPayMode(null);
       setPaymentForm({ amount: "", method: "manual", reference: "", date: today, notes: "" });
       if (onPaymentRecorded) onPaymentRecorded();
     } catch (e) { showToast(e.message, "error"); }
@@ -2807,25 +2808,17 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                 }} style={{ ...btnStyle(C.green), padding: "6px 12px", fontSize: 12 }}>Send Email</button>
               );
             })()}
-            {invoice && invoice.status !== "paid" && (
-              invoice.stripe_checkout_url ? (
-                <button onClick={() => { navigator.clipboard?.writeText(invoice.stripe_checkout_url); showToast("Payment link copied!"); }}
-                  style={{ ...btnStyle(C.blue), padding: "6px 12px", fontSize: 12 }}>Copy Pay Link</button>
-              ) : (
-                <button onClick={async () => {
-                  setStripeLoading(true);
-                  try {
-                    const r = await api.createStripeCheckout(invoice.id);
-                    const updated = await api.getInvoice(invoice.id);
-                    setInvoice(updated);
-                    showToast("Payment link created");
-                    if (r.checkout_url) { navigator.clipboard?.writeText(r.checkout_url); showToast("Link copied to clipboard"); }
-                  } catch (e) { showToast(e.message, "error"); }
-                  finally { setStripeLoading(false); }
-                }} disabled={stripeLoading} style={{ ...btnStyle(C.blue), padding: "6px 12px", fontSize: 12, opacity: stripeLoading ? 0.6 : 1 }}>
-                  {stripeLoading ? "Generating…" : "Generate Pay Link"}
-                </button>
-              )
+            {invoice && invoice.status !== "paid" && payMode === null && (
+              <button
+                onClick={() => {
+                  const owed = Math.max(0, (invoice.total || 0) - (invoice.amount_paid || 0));
+                  setPaymentForm(f => ({ ...f, amount: owed > 0 ? owed.toFixed(2) : "" }));
+                  setPayMode("choose");
+                }}
+                style={{ ...btnStyle(C.green), padding: "6px 14px", fontSize: 12 }}
+              >
+                Pay Invoice
+              </button>
             )}
             {invoice && (
               <button onClick={() => window.open(`/api/invoices/${invoice.id}/print`, "_blank")} style={{ ...btnStyle("#6b7280"), padding: "6px 12px", fontSize: 12 }}>Print / PDF</button>
@@ -2887,13 +2880,115 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
               </div>
             </div>
 
-            {/* Stripe payment link */}
-            {invoice.stripe_checkout_url && invoice.status !== "paid" && (
-              <div style={{ marginBottom: 16, padding: "10px 14px", background: "#1d4ed808", border: `1px solid ${C.blue}44`, borderRadius: 6, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: C.blue, fontWeight: 600 }}>Pay Now link:</span>
-                <a href={invoice.stripe_checkout_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: C.blue, wordBreak: "break-all" }}>{invoice.stripe_checkout_url}</a>
-                <button onClick={() => { navigator.clipboard?.writeText(invoice.stripe_checkout_url); showToast("Copied!"); }}
-                  style={{ background: "none", border: `1px solid ${C.blue}`, color: C.blue, borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer" }}>Copy</button>
+            {/* Unified pay panel */}
+            {invoice.status !== "void" && payMode !== null && (
+              <div style={{ marginBottom: 16, padding: 16, background: C.input, border: `1px solid ${C.inputBorder}`, borderRadius: 8 }}>
+                {payMode === "choose" && (
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>How would you like to record this payment?</div>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button
+                        onClick={() => setPayMode("manual")}
+                        style={{ ...btnStyle(C.green), padding: "10px 20px", fontSize: 13 }}
+                      >
+                        Record Payment (Cash / EFT / etc.)
+                      </button>
+                      <button
+                        onClick={() => setPayMode("stripe")}
+                        style={{ ...btnStyle(C.blue), padding: "10px 20px", fontSize: 13 }}
+                      >
+                        Send Stripe Payment Link
+                      </button>
+                      <button onClick={() => setPayMode(null)} style={{ ...btnStyle(C.muted), padding: "10px 16px", fontSize: 13 }}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {payMode === "manual" && (
+                  <div>
+                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 10 }}>Record Payment</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                      <div>
+                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Amount *</label>
+                        <input type="number" step="0.01" min="0" value={paymentForm.amount} onChange={e => setPaymentForm(f => ({ ...f, amount: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Date</label>
+                        <input type="date" value={paymentForm.date} onChange={e => setPaymentForm(f => ({ ...f, date: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Method</label>
+                        <select value={paymentForm.method} onChange={e => setPaymentForm(f => ({ ...f, method: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }}>
+                          <option value="manual">Manual</option>
+                          <option value="cash">Cash</option>
+                          <option value="eft">EFT / Bank Transfer</option>
+                          <option value="credit_card">Credit Card</option>
+                          <option value="cheque">Cheque</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Reference</label>
+                        <input type="text" value={paymentForm.reference} onChange={e => setPaymentForm(f => ({ ...f, reference: e.target.value }))} placeholder="optional" style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+                      </div>
+                    </div>
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Notes</label>
+                      <input type="text" value={paymentForm.notes} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} placeholder="optional" style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+                    </div>
+                    {invoice.status === "pending" && (
+                      <div style={{ fontSize: 11, color: "#a855f7", marginBottom: 8, padding: 6, background: "#a855f722", borderRadius: 4 }}>
+                        ℹ This invoice is pending (order not yet delivered). Payment will be held as a prepayment.
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={recordPayment} style={{ ...btnStyle(C.green), padding: "6px 14px", fontSize: 12 }}>Save Payment</button>
+                      <button onClick={() => setPayMode("choose")} style={{ ...btnStyle(C.muted), padding: "6px 14px", fontSize: 12 }}>← Back</button>
+                    </div>
+                  </div>
+                )}
+                {payMode === "stripe" && (
+                  <div>
+                    <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 10 }}>Stripe Payment Link</div>
+                    {invoice.stripe_checkout_url ? (
+                      <div>
+                        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
+                          Payment link ready — share with your customer. Stripe will pre-fill their email and saved cards if available.
+                        </div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                          <input readOnly value={invoice.stripe_checkout_url} style={{ ...inputStyle, flex: 1, minWidth: 180, color: C.blue, fontSize: 12 }} onFocus={e => e.target.select()} />
+                          <button onClick={() => { navigator.clipboard?.writeText(invoice.stripe_checkout_url); showToast("Copied!"); }} style={btnStyle(C.blue)}>Copy Link</button>
+                          <a href={invoice.stripe_checkout_url} target="_blank" rel="noreferrer" style={{ ...btnStyle("#6b7280"), textDecoration: "none", display: "inline-block" }}>Open</a>
+                        </div>
+                        <button onClick={() => setPayMode(null)} style={{ ...btnStyle(C.muted), padding: "6px 14px", fontSize: 12 }}>Close</button>
+                      </div>
+                    ) : (
+                      <div>
+                        <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+                          Generate a Stripe hosted payment page. Your customer's email and saved cards will be pre-filled automatically.
+                        </div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button
+                            disabled={stripeLoading}
+                            onClick={async () => {
+                              setStripeLoading(true);
+                              try {
+                                const r = await api.createStripeCheckout(invoice.id);
+                                const updated = await api.getInvoice(invoice.id);
+                                setInvoice(updated);
+                                showToast("Payment link created");
+                                if (r.url || r.checkout_url) { navigator.clipboard?.writeText(r.url || r.checkout_url); showToast("Link copied to clipboard"); }
+                              } catch (e) { showToast(e.message, "error"); }
+                              finally { setStripeLoading(false); }
+                            }}
+                            style={{ ...btnStyle(C.blue), opacity: stripeLoading ? 0.6 : 1 }}
+                          >
+                            {stripeLoading ? "Generating…" : "Generate Pay Link"}
+                          </button>
+                          <button onClick={() => setPayMode("choose")} style={{ ...btnStyle(C.muted), padding: "6px 14px", fontSize: 12 }}>← Back</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -3017,57 +3112,14 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                 <div style={{ padding: 12, color: C.muted, fontSize: 12, background: C.input, borderRadius: 6 }}>No payments recorded</div>
               )}
 
-              {/* Record Payment form */}
-              {invoice.status !== "void" && (
+              {/* Pay button — opens the unified pay panel above */}
+              {invoice.status !== "void" && payMode === null && (
                 <div style={{ marginTop: 12 }}>
-                  {!showPaymentForm ? (
-                    <button onClick={() => {
-                      const owed = Math.max(0, (invoice.total || 0) - (invoice.amount_paid || 0));
-                      setPaymentForm(f => ({ ...f, amount: owed > 0 ? owed.toFixed(2) : "" }));
-                      setShowPaymentForm(true);
-                    }} style={{ ...btnStyle(C.green), padding: "8px 16px", fontSize: 13 }}>+ Record Payment</button>
-                  ) : (
-                    <div style={{ padding: 12, background: C.input, borderRadius: 6, border: `1px solid ${C.border}` }}>
-                      <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", marginBottom: 8 }}>New Payment</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                        <div>
-                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Amount *</label>
-                          <input type="number" step="0.01" min="0" value={paymentForm.amount} onChange={e => setPaymentForm(f => ({ ...f, amount: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Date</label>
-                          <input type="date" value={paymentForm.date} onChange={e => setPaymentForm(f => ({ ...f, date: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Method</label>
-                          <select value={paymentForm.method} onChange={e => setPaymentForm(f => ({ ...f, method: e.target.value }))} style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }}>
-                            <option value="manual">Manual</option>
-                            <option value="cash">Cash</option>
-                            <option value="eft">EFT / Bank Transfer</option>
-                            <option value="credit_card">Credit Card</option>
-                            <option value="cheque">Cheque</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Reference</label>
-                          <input type="text" value={paymentForm.reference} onChange={e => setPaymentForm(f => ({ ...f, reference: e.target.value }))} placeholder="optional" style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
-                        </div>
-                      </div>
-                      <div style={{ marginBottom: 8 }}>
-                        <label style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Notes</label>
-                        <input type="text" value={paymentForm.notes} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} placeholder="optional" style={{ width: "100%", padding: 6, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
-                      </div>
-                      {invoice.status === "pending" && (
-                        <div style={{ fontSize: 11, color: "#a855f7", marginBottom: 8, padding: 6, background: "#a855f722", borderRadius: 4 }}>
-                          ℹ This invoice is pending (order not yet delivered). Payment will be held as a prepayment.
-                        </div>
-                      )}
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={recordPayment} style={{ ...btnStyle(C.green), padding: "6px 14px", fontSize: 12 }}>Save Payment</button>
-                        <button onClick={() => setShowPaymentForm(false)} style={{ ...btnStyle(C.muted), padding: "6px 14px", fontSize: 12 }}>Cancel</button>
-                      </div>
-                    </div>
-                  )}
+                  <button onClick={() => {
+                    const owed = Math.max(0, (invoice.total || 0) - (invoice.amount_paid || 0));
+                    setPaymentForm(f => ({ ...f, amount: owed > 0 ? owed.toFixed(2) : "" }));
+                    setPayMode("choose");
+                  }} style={{ ...btnStyle(C.green), padding: "8px 16px", fontSize: 13 }}>Pay Invoice</button>
                 </div>
               )}
             </div>
@@ -6501,6 +6553,8 @@ function AdministratorView({ showToast }) {
         business_email: settings.business_email || "",
         business_bank: settings.business_bank || "",
         business_logo: settings.business_logo || "",
+        invoice_notes: settings.invoice_notes || "",
+        statement_notes: settings.statement_notes || "",
       };
       await api.updateSettings(payload);
       showToast("Settings saved");
@@ -6654,6 +6708,26 @@ function AdministratorView({ showToast }) {
               rows={3}
               style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
               placeholder={"BSB: 123-456\nAccount: 789 012 345\nAccount Name: Acme Gas Pty Ltd"}
+            />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={labelStyle}>Invoice Notes <span style={{ color: C.muted, fontWeight: 400, textTransform: "none" }}>(shown above bank details on printed invoices)</span></label>
+            <textarea
+              value={settings.invoice_notes || ""}
+              onChange={e => update("invoice_notes", e.target.value)}
+              rows={3}
+              style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
+              placeholder="e.g. Thank you for your business. Please contact us if you have any queries about this invoice."
+            />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={labelStyle}>Statement Notes <span style={{ color: C.muted, fontWeight: 400, textTransform: "none" }}>(shown at the bottom of account statements)</span></label>
+            <textarea
+              value={settings.statement_notes || ""}
+              onChange={e => update("statement_notes", e.target.value)}
+              rows={3}
+              style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
+              placeholder="e.g. Payments can be made via EFT. Please quote your account number as reference."
             />
           </div>
         </div>

@@ -2526,14 +2526,19 @@ module.exports = function createRoutes(db) {
 
     let lines = orderSections.flatMap(s => s.lines);
 
-    // Rental invoice transactions (shown alongside or when no orders are linked)
+    // Rental invoice transactions — prefer matching by invoice_id for accuracy;
+    // fall back to customer_id + date for legacy rows (before invoice_id was stored).
     const rentalTxns = db.prepare(`
       SELECT t.cylinder_type as cylinder_type_id, t.qty, ct.label as cylinder_label, ct.default_price
       FROM transactions t
       JOIN cylinder_types ct ON ct.id = t.cylinder_type
-      WHERE t.customer_id = ? AND t.type = 'rental_invoice' AND t.date = ?
+      WHERE t.type = 'rental_invoice'
         AND t.source IN ('auto_rental', 'order_linked_rental')
-    `).all(inv.customer_id, inv.invoice_date);
+        AND (
+          (t.invoice_id IS NOT NULL AND t.invoice_id != '' AND t.invoice_id = ?)
+          OR ((t.invoice_id IS NULL OR t.invoice_id = '') AND t.customer_id = ? AND t.date = ?)
+        )
+    `).all(inv.id, inv.customer_id, inv.invoice_date);
     const rentalLines = rentalTxns.map(t => {
       const unitPrice = getPriceForDate(db, inv.customer_id, t.cylinder_type_id, inv.invoice_date, t.default_price || 0);
       return {
@@ -2567,6 +2572,7 @@ module.exports = function createRoutes(db) {
     const bizEmail   = getSetting(db, "business_email", "");
     const bizBank    = getSetting(db, "business_bank", "");
     const bizLogo    = getSetting(db, "business_logo", ""); // base64 data URL
+    const invoiceNotes = getSetting(db, "invoice_notes", "");
 
     // All orders linked to this invoice
     const linkedOrders = db.prepare(
@@ -2590,14 +2596,18 @@ module.exports = function createRoutes(db) {
       return { order: o, lines };
     });
 
-    // Rental lines
+    // Rental lines — prefer invoice_id match; fall back to customer_id + date for legacy rows
     const rentalTxns = db.prepare(`
       SELECT t.cylinder_type as cylinder_type_id, t.qty, ct.label as cylinder_label, ct.default_price
       FROM transactions t
       JOIN cylinder_types ct ON ct.id = t.cylinder_type
-      WHERE t.customer_id = ? AND t.type = 'rental_invoice' AND t.date = ?
+      WHERE t.type = 'rental_invoice'
         AND t.source IN ('auto_rental', 'order_linked_rental')
-    `).all(inv.customer_id, inv.invoice_date);
+        AND (
+          (t.invoice_id IS NOT NULL AND t.invoice_id != '' AND t.invoice_id = ?)
+          OR ((t.invoice_id IS NULL OR t.invoice_id = '') AND t.customer_id = ? AND t.date = ?)
+        )
+    `).all(inv.id, inv.customer_id, inv.invoice_date);
 
     const rentalLines = rentalTxns.map(t => {
       const unitPrice = getPriceForDate(db, inv.customer_id, t.cylinder_type_id, inv.invoice_date, t.default_price || 0);
@@ -2736,6 +2746,7 @@ module.exports = function createRoutes(db) {
   .owed-row td { color: ${owed > 0 ? "#dc2626" : "#16a34a"}; font-size: 15px; font-weight: 800; background: transparent; }
   .bank-box { margin-top: 28px; padding: 14px 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; font-size: 12px; color: #334155; }
   .bank-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #1d4ed8; margin-bottom: 6px; }
+  .inv-notes { margin-top: 20px; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; color: #475569; line-height: 1.6; white-space: pre-wrap; }
   .status-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
     background: ${ inv.status==="paid" ? "#dcfce7" : inv.status==="void" ? "#f1f5f9" : "#fef3c7" };
     color: ${ inv.status==="paid" ? "#15803d" : inv.status==="void" ? "#64748b" : "#b45309" }; }
@@ -2816,6 +2827,8 @@ ${fallbackHTML}
 </div>
 
 ${paymentsHTML}
+
+${invoiceNotes ? `<div class="inv-notes">${invoiceNotes.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>` : ""}
 
 ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>${bizBank.replace(/\n/g, "<br>")}</div>` : ""}
 
@@ -4095,8 +4108,23 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
       const stripe = stripeLib(process.env.STRIPE_SECRET_KEY);
       const appUrl = (process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, "");
       const custEmail = ((customer?.accounts_email || customer?.email || "").trim()) || undefined;
+      const custName = (customer?.name || customer?.contact || "").trim() || undefined;
 
-      const session = await stripe.checkout.sessions.create({
+      // Reuse existing Stripe Customer or create a new one so Stripe can pre-fill
+      // contact details and recognise returning customers across invoices.
+      let stripeCustomerId = customer?.stripe_customer_id || "";
+      if (!stripeCustomerId && custEmail) {
+        const sc = await stripe.customers.create({
+          email: custEmail,
+          name: custName,
+          metadata: { cylindertrack_customer_id: inv.customer_id },
+        });
+        stripeCustomerId = sc.id;
+        db.prepare("UPDATE customers SET stripe_customer_id = ? WHERE id = ?")
+          .run(stripeCustomerId, inv.customer_id);
+      }
+
+      const sessionParams = {
         payment_method_types: ["card"],
         line_items: [{
           price_data: {
@@ -4107,16 +4135,24 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
           quantity: 1,
         }],
         mode: "payment",
-        customer_email: custEmail,
         success_url: `${appUrl}/?payment=success`,
         cancel_url: `${appUrl}/?payment=cancelled`,
         metadata: { invoice_id: inv.id },
-      });
+      };
+      // Attach Stripe Customer (enables saved card pre-fill) if we have one;
+      // otherwise fall back to pre-filling just the email field.
+      if (stripeCustomerId) {
+        sessionParams.customer = stripeCustomerId;
+      } else if (custEmail) {
+        sessionParams.customer_email = custEmail;
+      }
+
+      const session = await stripe.checkout.sessions.create(sessionParams);
 
       db.prepare("UPDATE invoices SET stripe_checkout_id = ?, stripe_checkout_url = ? WHERE id = ?")
         .run(session.id, session.url, inv.id);
 
-      res.json({ checkout_url: session.url, session_id: session.id });
+      res.json({ checkout_url: session.url, session_id: session.id, url: session.url });
     } catch (err) {
       console.error("[stripe] checkout creation failed:", err.message);
       res.status(500).json({ error: err.message });
@@ -6042,7 +6078,7 @@ function billCustomerRental(db, cust, mode) {
   let transactionsCreated = 0;
 
   const txStmt = db.prepare(
-    "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, auto_generated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)"
+    "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, auto_generated, invoice_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
   );
   const invStmt = db.prepare(
     `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
@@ -6089,7 +6125,7 @@ function billCustomerRental(db, cust, mode) {
       txStmt.run(
         txId, cust.id, line.ct.id, "rental_invoice", line.qty, billDate,
         `Auto rental invoice ${invoiceNumber} — ${freqLabel} as at ${billDate}`,
-        "auto_rental"
+        "auto_rental", invoiceId
       );
       transactionsCreated++;
     }
@@ -6243,7 +6279,7 @@ function billCommercialAccount(db, cust, mode) {
     cust.rental_frequency.toLowerCase() === cust.invoice_frequency.toLowerCase();
 
   const txStmt = db.prepare(
-    "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, auto_generated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)"
+    "INSERT INTO transactions (id, customer_id, cylinder_type, type, qty, date, notes, source, auto_generated, invoice_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
   );
   const invStmt = db.prepare(
     `INSERT INTO invoices (id, invoice_number, customer_id, order_id, po_number, total, amount_paid, status, invoice_date, due_date)
@@ -6323,7 +6359,7 @@ function billCommercialAccount(db, cust, mode) {
         nodeCrypto.randomBytes(6).toString("hex"), cust.id, line.cylinderTypeId,
         "rental_invoice", line.qty, billDate,
         `Auto rental invoice ${invoiceNumber} — ${freqLabel} as at ${billDate}`,
-        "auto_rental"
+        "auto_rental", invoiceId
       );
       txCount++;
     }
