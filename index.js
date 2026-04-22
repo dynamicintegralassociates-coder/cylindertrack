@@ -4,7 +4,7 @@ const cookieParser = require("cookie-parser");
 const path = require("path");
 const { initDB } = require("./db");
 const createRoutes = require("./routes");
-const { runDueRentals, runAutoCloseOrders } = require("./routes");
+const { runDueRentals, runAutoCloseOrders, pollOptimoActiveOrders } = require("./routes");
 const createAuth = require("./auth");
 const { requireAuth } = require("./auth");
 
@@ -38,6 +38,46 @@ if (process.env.RECOVERY_PASSWORD) {
 
 // Middleware
 app.use(cors({ origin: true, credentials: true }));
+
+// ── Stripe webhook — must be registered BEFORE express.json() so we get the raw body ──
+if (process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET) {
+  const stripeLib = require("stripe");
+  const stripeClient = stripeLib(process.env.STRIPE_SECRET_KEY);
+  app.post("/webhooks/stripe", express.raw({ type: "application/json" }), (req, res) => {
+    let event;
+    try {
+      event = stripeClient.webhooks.constructEvent(req.body, req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+      console.error("[stripe webhook] signature error:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      const invoiceId = session.metadata?.invoice_id;
+      if (invoiceId) {
+        try {
+          const inv = db.prepare("SELECT id, total FROM invoices WHERE id = ?").get(invoiceId);
+          if (inv) {
+            db.prepare("UPDATE invoices SET amount_paid = total, status = 'paid', stripe_checkout_id = ? WHERE id = ?")
+              .run(session.id, invoiceId);
+            // Record the payment
+            const crypto = require("crypto");
+            const payId = crypto.randomBytes(16).toString("hex");
+            const today = new Date().toISOString().split("T")[0];
+            db.prepare(
+              "INSERT INTO payments (id, customer_id, invoice_id, amount, method, reference, date, notes) SELECT ?, customer_id, ?, total, 'stripe', ?, ?, 'Stripe online payment' FROM invoices WHERE id = ?"
+            ).run(payId, invoiceId, session.id, today, invoiceId);
+            console.log(`[stripe webhook] Invoice ${invoiceId} marked paid via Stripe session ${session.id}`);
+          }
+        } catch (e) {
+          console.error("[stripe webhook] DB error:", e.message);
+        }
+      }
+    }
+    res.json({ received: true });
+  });
+}
+
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser());
 
@@ -102,6 +142,22 @@ function scheduledRentalRun() {
 // First run shortly after boot, then every 6 hours
 setTimeout(scheduledRentalRun, 30 * 1000);
 rentalTimer = setInterval(scheduledRentalRun, RENTAL_INTERVAL_MS);
+
+// ============================================================
+// OPTIMOROUTE REAL-TIME POLLER
+// Polls OR every 3 minutes for completion of dispatched orders.
+// ============================================================
+async function scheduledOrPoll() {
+  try {
+    await pollOptimoActiveOrders(db);
+  } catch (err) {
+    console.error("[OR poller] crashed:", err.message);
+  }
+}
+
+// Start polling 60s after boot, then every 3 minutes
+setTimeout(scheduledOrPoll, 60 * 1000);
+setInterval(scheduledOrPoll, 3 * 60 * 1000);
 
 app.listen(PORT, () => {
   console.log(`\n  ╔══════════════════════════════════════╗`);

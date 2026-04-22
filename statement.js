@@ -38,9 +38,17 @@ function fmtDateShort(d) {
 }
 
 function statementDueDate(toDate, paymentTerms) {
-  const d = new Date(toDate);
-  const terms = parseInt(paymentTerms) || 30;
-  d.setDate(d.getDate() + terms);
+  const pt = (paymentTerms || "").toLowerCase().trim();
+  const d = new Date(toDate + "T00:00:00");
+  if (!pt || pt === "cod") return toDate;
+  if (pt.startsWith("eom")) {
+    const days = parseInt(pt) || 14;
+    const eom = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    eom.setDate(eom.getDate() + days);
+    return eom.toISOString().split("T")[0];
+  }
+  const days = parseInt(pt) || 30;
+  d.setDate(d.getDate() + days);
   return d.toISOString().split("T")[0];
 }
 
@@ -183,12 +191,20 @@ function generateStatementData(db, customerId, fromDate, toDate) {
   const accountCode = customer.account_number || customer.id.substring(0, 8).toUpperCase();
   const docRef = `${accountCode}-${toDateObj.getMonth() + 1}-${toDateObj.getFullYear()}`;
 
+  // Use the latest actual due_date from invoices in the period; fall back to calculating from toDate
+  const latestInvDueDate = invoicesInPeriod
+    .map(i => i.due_date)
+    .filter(Boolean)
+    .sort()
+    .pop();
+  const dueDate = latestInvDueDate || statementDueDate(toDate, customer.payment_terms);
+
   return {
     customer,
     settings,
     period: { from: fromDate, to: toDate },
     statement_date: toDate,
-    due_date: statementDueDate(toDate, customer.payment_terms),
+    due_date: dueDate,
     document_reference: docRef,
     account_code: accountCode,
     summary: {

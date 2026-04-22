@@ -10,8 +10,10 @@ async function request(path, options = {}) {
     ...options,
   });
   if (res.status === 401) {
-    if (onAuthFail) onAuthFail();
-    throw new Error("Not authenticated");
+    const body = await res.json().catch(() => ({}));
+    // Only redirect to login screen for protected-route 401s, not failed login attempts
+    if (onAuthFail && !path.startsWith("/auth/")) onAuthFail();
+    throw new Error(body.error || "Not authenticated");
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -40,6 +42,7 @@ const api = {
   getCustomerOnHand: (id) => request(`/customers/${id}/on-hand`),
   getLastSalePrice: (id) => request(`/customers/${id}/last-sale-price`),
   importCustomers: (rows) => request("/admin/customers/import", { method: "POST", body: JSON.stringify({ rows }) }),
+  importCylinderTypes: (rows) => request("/admin/cylinder-types/import", { method: "POST", body: JSON.stringify({ rows }) }),
   revealCC: (id) => request(`/customers/${id}/reveal-cc`),
   deleteCC: (id) => request(`/customers/${id}/cc`, { method: "DELETE" }),
 
@@ -57,6 +60,16 @@ const api = {
   createTransaction: (data) => request("/transactions", { method: "POST", body: JSON.stringify(data) }),
   deleteTransaction: (id) => request(`/transactions/${id}`, { method: "DELETE" }),
 
+  // Reports
+  runReport: (name, params) => {
+    const qs = new URLSearchParams(params || {}).toString();
+    return request(`/reports/${name}${qs ? "?" + qs : ""}`);
+  },
+
+  // Return-other summary and return-to-owner
+  getReturnOtherSummary: () => request("/transactions/return-other-summary"),
+  returnToOwner: (data) => request("/transactions/return-to-owner", { method: "POST", body: JSON.stringify(data) }),
+
   // On-hand
   getOnHand: () => request("/on-hand"),
   getOnHandAsAt: (date) => request(`/on-hand/as-at?date=${encodeURIComponent(date)}`),
@@ -72,6 +85,7 @@ const api = {
   // Email
   getEmailConfig: () => request("/email/config"),
   sendInvoiceEmail: (invoiceId, recipientOverride) => request(`/invoices/${invoiceId}/email`, { method: "POST", body: JSON.stringify({ recipient_override: recipientOverride || null }) }),
+  createStripeCheckout: (invoiceId) => request(`/invoices/${invoiceId}/stripe-checkout`, { method: "POST" }),
   sendInvoiceEmailBulk: (invoiceIds) => request("/invoices/email-bulk", { method: "POST", body: JSON.stringify({ invoice_ids: invoiceIds }) }),
   getEmailLog: (limit) => request(`/admin/email-log${limit ? `?limit=${limit}` : ""}`),
 
@@ -109,6 +123,7 @@ const api = {
   matchCreditToOrder: (id) => request(`/orders/${id}/match-credit`, { method: "POST" }),
   // Round 3
   pushOrderToOptimo: (id) => request(`/orders/${id}/push-to-optimo`, { method: "POST" }),
+  pullOptimoStatus: (id) => request(`/orders/${id}/pull-optimo`, { method: "POST" }),
   markLineDelivered: (orderId, lineId, data) => request(`/orders/${orderId}/lines/${lineId}/deliver`, { method: "POST", body: JSON.stringify(data || {}) }),
   cancelLine: (orderId, lineId) => request(`/orders/${orderId}/lines/${lineId}/cancel`, { method: "POST" }),
   // 3.0.10: Manual completion for Optimo failsafe (Del/Ret/Roth per line)
@@ -151,6 +166,10 @@ const api = {
   createCredit: (data) => request("/credits", { method: "POST", body: JSON.stringify(data) }),
   approveCredit: (id) => request(`/credits/${id}/approve`, { method: "POST" }),
   rejectCredit: (id) => request(`/credits/${id}/reject`, { method: "POST" }),
+
+  // Easy Order
+  easyOrderPrep: (customerId) => request(`/easy-order/prep/${encodeURIComponent(customerId)}`),
+  addCustomerNote: (id, text) => request(`/customers/${id}/internal-note`, { method: "POST", body: JSON.stringify({ text }) }),
 
   // Search
   search: (q) => request(`/search?q=${encodeURIComponent(q)}`),

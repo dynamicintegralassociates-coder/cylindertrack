@@ -128,6 +128,7 @@ function initDB() {
   try { db.exec("ALTER TABLE orders ADD COLUMN duration INTEGER DEFAULT 5"); } catch(e) { /* exists */ }
   try { db.exec("ALTER TABLE orders ADD COLUMN invoice_id TEXT DEFAULT ''"); } catch(e) { /* exists */ }
   try { db.exec("ALTER TABLE orders ADD COLUMN payment_amount REAL DEFAULT 0"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE orders ADD COLUMN scheduled_date TEXT DEFAULT ''"); } catch(e) { /* exists */ }
 
   // --- CYLINDER TYPES ---
   db.exec(`
@@ -237,6 +238,10 @@ function initDB() {
       FOREIGN KEY (customer_id) REFERENCES customers(id)
     )
   `);
+
+  // Stripe payment link columns
+  try { db.exec("ALTER TABLE invoices ADD COLUMN stripe_checkout_id TEXT DEFAULT ''"); } catch(e) { /* exists */ }
+  try { db.exec("ALTER TABLE invoices ADD COLUMN stripe_checkout_url TEXT DEFAULT ''"); } catch(e) { /* exists */ }
 
   // --- PAYMENTS ---
   db.exec(`

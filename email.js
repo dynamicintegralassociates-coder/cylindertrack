@@ -31,78 +31,118 @@ function isEmailEnabled() {
 function generateInvoicePdf(invoice, customer) {
   return new Promise((resolve, reject) => {
     try {
+      const GST_RATE = 0.10;
+      const isCommercial = (customer?.customer_category || "").toLowerCase() === "commercial";
+      const gross = (net) => Math.round((net || 0) * (1 + GST_RATE) * 100) / 100;
+      const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
+
+      const BRAND   = "#1d4ed8"; // deep blue
+      const BRAND_L = "#dbeafe"; // light blue (stripe)
+      const DARK    = "#1e293b";
+      const MID     = "#475569";
+      const PAID_G  = "#16a34a";
+
       const doc = new PDFDocument({ size: "A4", margin: 50 });
       const chunks = [];
       doc.on("data", c => chunks.push(c));
       doc.on("end", () => resolve(Buffer.concat(chunks)));
       doc.on("error", reject);
 
-      // Header
-      doc.fontSize(20).font("Helvetica-Bold").text("RENTAL INVOICE", { align: "left" });
-      doc.moveDown(0.3);
-      doc.fontSize(10).font("Helvetica").fillColor("#555");
-      doc.text(`Invoice Number: ${invoice.invoice_number || "—"}`);
-      doc.text(`Invoice Date:   ${invoice.invoice_date || ""}`);
-      doc.moveDown();
+      // ── Coloured header band ─────────────────────────────────────────────
+      doc.rect(0, 0, 595, 72).fill(BRAND);
+      doc.fontSize(22).font("Helvetica-Bold").fillColor("#ffffff")
+        .text("TAX INVOICE", 50, 22, { align: "left" });
+      doc.fontSize(12).font("Helvetica-Bold").fillColor("#bfdbfe")
+        .text(`${invoice.invoice_number || ""}`, 50, 46, { align: "right", width: 495 });
 
-      // Customer block
-      doc.fontSize(11).font("Helvetica-Bold").fillColor("#000");
-      doc.text("Bill To:");
-      doc.font("Helvetica").fillColor("#333");
-      if (customer?.name) doc.text(customer.name);
-      if (customer?.address) doc.text(customer.address);
-      if (customer?.account_number) doc.text(`Account: ${customer.account_number}`);
-      doc.moveDown();
+      // ── Invoice meta (below band) ────────────────────────────────────────
+      let y = 84;
+      doc.fontSize(9).font("Helvetica").fillColor(MID);
+      doc.text(`Invoice Date: ${invoice.invoice_date || ""}`, 50, y);
+      doc.text(isCommercial ? "Prices EXCLUDING GST" : "Prices INCLUDING GST", 50, y + 11);
 
-      // Line items table
-      const tableTop = doc.y;
+      // ── Customer block ───────────────────────────────────────────────────
+      doc.fontSize(8).font("Helvetica-Bold").fillColor(BRAND)
+        .text("BILL TO", 350, y);
+      doc.fontSize(11).font("Helvetica-Bold").fillColor(DARK);
+      if (customer?.name) doc.text(customer.name, 350, y + 10);
+      doc.fontSize(10).font("Helvetica").fillColor(MID);
+      if (customer?.company_name) doc.text(customer.company_name, 350, doc.y, { lineBreak: false });
+      if (customer?.address) doc.text(customer.address, 350);
+      if (customer?.account_number) doc.text(`Account: ${customer.account_number}`, 350);
+
+      // ── Divider ──────────────────────────────────────────────────────────
+      y = Math.max(doc.y, y + 40) + 10;
+      doc.moveTo(50, y).lineTo(545, y).strokeColor(BRAND_L).lineWidth(1.5).stroke();
+      y += 12;
+
+      // ── Line items table header ──────────────────────────────────────────
       const colX = { desc: 50, qty: 320, unit: 380, total: 470 };
-      doc.fontSize(10).font("Helvetica-Bold").fillColor("#000");
-      doc.text("Description", colX.desc, tableTop);
-      doc.text("Qty", colX.qty, tableTop, { width: 50, align: "right" });
-      doc.text("Unit Price", colX.unit, tableTop, { width: 80, align: "right" });
-      doc.text("Amount", colX.total, tableTop, { width: 80, align: "right" });
-      doc.moveTo(50, tableTop + 14).lineTo(550, tableTop + 14).strokeColor("#333").lineWidth(1).stroke();
+      doc.rect(50, y, 495, 16).fill(BRAND);
+      doc.fontSize(9).font("Helvetica-Bold").fillColor("#ffffff");
+      doc.text("Description",                                  colX.desc, y + 3, { width: 260 });
+      doc.text("Qty",                                          colX.qty,  y + 3, { width: 50,  align: "right" });
+      doc.text(isCommercial ? "Unit (ex GST)" : "Unit (inc GST)", colX.unit, y + 3, { width: 80, align: "right" });
+      doc.text(isCommercial ? "Amount (ex)"  : "Amount (inc)", colX.total, y + 3, { width: 75, align: "right" });
+      y += 20;
 
-      let y = tableTop + 22;
-      doc.font("Helvetica").fillColor("#333");
+      // ── Line item rows ───────────────────────────────────────────────────
       const lines = invoice.lines || [];
+      let rowOdd = true;
       for (const line of lines) {
         if (y > 720) { doc.addPage(); y = 50; }
+        if (!rowOdd) {
+          doc.rect(50, y - 2, 495, 16).fill(BRAND_L);
+        }
+        rowOdd = !rowOdd;
         const desc = `${line.cylinder_label || line.label || "Cylinder"} — Cylinder Rental`;
         const qty = String(line.qty || line.on_hand || 0);
-        const unit = `$${Number(line.unit_price || 0).toFixed(2)}`;
-        const total = `$${Number(line.line_total || (line.unit_price * (line.qty || line.on_hand)) || 0).toFixed(2)}`;
-        doc.text(desc, colX.desc, y, { width: 260 });
-        doc.text(qty, colX.qty, y, { width: 50, align: "right" });
-        doc.text(unit, colX.unit, y, { width: 80, align: "right" });
-        doc.text(total, colX.total, y, { width: 80, align: "right" });
+        const netUnit  = Number(line.unit_price || 0);
+        const netTotal = Number(line.line_total || (netUnit * (line.qty || line.on_hand)) || 0);
+        const displayUnit  = isCommercial ? fmt(netUnit)  : fmt(gross(netUnit));
+        const displayTotal = isCommercial ? fmt(netTotal) : fmt(gross(netTotal));
+        doc.fontSize(10).font("Helvetica").fillColor(DARK);
+        doc.text(desc,         colX.desc, y, { width: 260 });
+        doc.text(qty,          colX.qty,  y, { width: 50,  align: "right" });
+        doc.text(displayUnit,  colX.unit, y, { width: 80,  align: "right" });
+        doc.text(displayTotal, colX.total, y, { width: 75,  align: "right" });
         y += 18;
       }
 
-      // Totals
-      y += 6;
-      doc.moveTo(360, y).lineTo(550, y).strokeColor("#666").lineWidth(0.5).stroke();
+      // ── Totals ───────────────────────────────────────────────────────────
       y += 8;
-      const subtotal = Number(invoice.subtotal || invoice.total || 0);
-      const gst = Number(invoice.gst || (subtotal * 0.10) || 0);
-      const grandTotal = Number(invoice.grandTotal || (subtotal + gst) || 0);
+      doc.moveTo(360, y).lineTo(545, y).strokeColor(BRAND).lineWidth(1).stroke();
+      y += 10;
+      const subtotal   = Number(invoice.subtotal || invoice.total || 0);
+      const gst        = Math.round(subtotal * GST_RATE * 100) / 100;
+      const grandTotal = Math.round((subtotal + gst) * 100) / 100;
 
-      doc.font("Helvetica").fillColor("#333");
-      doc.text("Subtotal:", 360, y, { width: 110, align: "right" });
-      doc.text(`$${subtotal.toFixed(2)}`, 470, y, { width: 80, align: "right" });
-      y += 16;
-      doc.text("GST (10%):", 360, y, { width: 110, align: "right" });
-      doc.text(`$${gst.toFixed(2)}`, 470, y, { width: 80, align: "right" });
-      y += 16;
-      doc.font("Helvetica-Bold").fillColor("#000");
-      doc.text("TOTAL (incl. GST):", 360, y, { width: 110, align: "right" });
-      doc.text(`$${grandTotal.toFixed(2)}`, 470, y, { width: 80, align: "right" });
+      if (isCommercial) {
+        doc.fontSize(10).font("Helvetica").fillColor(MID);
+        doc.text("Subtotal (excl. GST):", 360, y, { width: 110, align: "right" });
+        doc.text(fmt(subtotal), 470, y, { width: 75, align: "right" });
+        y += 16;
+        doc.text("GST (10%):", 360, y, { width: 110, align: "right" });
+        doc.text(fmt(gst), 470, y, { width: 75, align: "right" });
+        y += 16;
+        doc.fontSize(12).font("Helvetica-Bold").fillColor(BRAND);
+        doc.text("TOTAL (incl. GST):", 360, y, { width: 110, align: "right" });
+        doc.text(fmt(grandTotal), 470, y, { width: 75, align: "right" });
+      } else {
+        doc.fontSize(12).font("Helvetica-Bold").fillColor(BRAND);
+        doc.text("TOTAL (incl. GST):", 360, y, { width: 110, align: "right" });
+        doc.text(fmt(grandTotal), 470, y, { width: 75, align: "right" });
+        y += 16;
+        doc.fontSize(8).font("Helvetica").fillColor(MID);
+        doc.text(`Includes GST of ${fmt(gst)}`, 360, y, { width: 185, align: "right" });
+        doc.fontSize(10);
+      }
 
-      // Footer
-      doc.font("Helvetica").fontSize(9).fillColor("#888");
-      doc.text("Thank you for your business.", 50, 760, { align: "center", width: 500 });
-      doc.text("Please remit payment as per your usual arrangement.", 50, 772, { align: "center", width: 500 });
+      // ── Footer ───────────────────────────────────────────────────────────
+      doc.fontSize(9).font("Helvetica").fillColor(PAID_G);
+      doc.text("Thank you for your business.", 50, 760, { align: "center", width: 495 });
+      doc.fontSize(8).fillColor(MID);
+      doc.text("Please remit payment as per your usual arrangement.", 50, 773, { align: "center", width: 495 });
 
       doc.end();
     } catch (err) {
@@ -168,7 +208,8 @@ async function sendViaResend({ to, subject, text, html, attachments }) {
 // Build a plain-text rental invoice body (mirrors the App.jsx mailto version
 // so the email looks consistent regardless of whether mailto or server is used).
 // ────────────────────────────────────────────────────────────────────────────
-function buildInvoiceText(invoice, customer) {
+function buildInvoiceText(invoice, customer, options = {}) {
+  const { paymentUrl } = options;
   const lines = [];
   lines.push(`Hi${customer?.name ? ` ${customer.name}` : ""},`);
   lines.push("");
@@ -194,6 +235,13 @@ function buildInvoiceText(invoice, customer) {
   lines.push(`GST (10%):          $${gst}`);
   lines.push(`TOTAL (incl. GST):  $${grandTotal}`);
   lines.push("");
+  if (paymentUrl) {
+    lines.push("────────────────────────────────");
+    lines.push("Pay online now:");
+    lines.push(paymentUrl);
+    lines.push("────────────────────────────────");
+    lines.push("");
+  }
   lines.push("Please remit payment as per your usual arrangement.");
   lines.push("");
   lines.push("Thanks,");

@@ -92,12 +92,25 @@ function Card({ children, style }) {
   return <div style={{ ...cardStyle, ...style }}>{children}</div>;
 }
 
-function StatCard({ label, value, color, icon }) {
+function StatCard({ label, value, color, sub, onClick }) {
   return (
-    <Card style={{ flex: 1, minWidth: 140 }}>
+    <div
+      onClick={onClick}
+      style={{
+        ...cardStyle,
+        flex: 1, minWidth: 150,
+        cursor: onClick ? "pointer" : "default",
+        transition: "box-shadow 0.15s, transform 0.1s",
+        userSelect: "none",
+      }}
+      onMouseEnter={e => { if (onClick) { e.currentTarget.style.boxShadow = `0 4px 16px ${color || C.accent}33`; e.currentTarget.style.transform = "translateY(-2px)"; } }}
+      onMouseLeave={e => { e.currentTarget.style.boxShadow = cardStyle.boxShadow || "0 1px 4px #0001"; e.currentTarget.style.transform = ""; }}
+    >
       <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>{label}</div>
       <div style={{ fontSize: 28, fontWeight: 800, color: color || C.text, letterSpacing: "-0.02em" }}>{value}</div>
-    </Card>
+      {sub && <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{sub}</div>}
+      {onClick && <div style={{ fontSize: 10, color: color || C.accent, marginTop: 6, fontWeight: 600, letterSpacing: "0.04em" }}>VIEW →</div>}
+    </div>
   );
 }
 
@@ -173,6 +186,8 @@ const Icons = {
   route: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
   users: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>,
   sync: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>,
+  easyorder: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
+  reports: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>,
 };
 
 // ==================== OPTIMOROUTE VIEW ====================
@@ -673,106 +688,90 @@ function MatchModal({ order, customers, cylinderTypes, onImport, onClose }) {
 }
 
 // ==================== DASHBOARD VIEW ====================
-function DashboardView({ stats }) {
+function DashboardView({ stats, onNavigate }) {
+  const s = stats || {};
+  const fmtAmt = (n) => `$${Number(n || 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
   return (
     <div>
-      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Dashboard</h2>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-        <StatCard label="Customers" value={stats?.total_customers || 0} color={C.blue} />
-        <StatCard label="Cylinders On-Hand" value={stats?.total_on_hand || 0} color={C.accent} />
-        <StatCard label="Deliveries" value={stats?.total_deliveries || 0} color={C.green} />
-        <StatCard label="Returns" value={stats?.total_returns || 0} color={C.red} />
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 20 }}>Dashboard</h2>
+
+      {/* Row 1: Customers + Cylinders */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 12 }}>
+        <StatCard
+          label="Active Customers"
+          value={s.active_customers ?? 0}
+          color={C.blue}
+          onClick={() => onNavigate("customers")}
+        />
+        <StatCard
+          label="Cylinders On Hand"
+          value={s.total_on_hand ?? 0}
+          color={C.accent}
+          onClick={() => onNavigate("tracking")}
+        />
+        <StatCard
+          label="Open Orders"
+          value={s.orders?.open ?? 0}
+          color="#f59e0b"
+          sub={s.open_orders_amount > 0 ? fmtAmt(s.open_orders_amount) : null}
+          onClick={() => onNavigate("orders")}
+        />
+        <StatCard
+          label="Total Outstanding"
+          value={fmtAmt(s.open_invoices_amount ?? 0)}
+          color={C.accent}
+          sub={`${s.open_invoices_count ?? 0} open invoice${(s.open_invoices_count ?? 0) !== 1 ? "s" : ""}`}
+          onClick={() => onNavigate("billing")}
+        />
+        <StatCard
+          label="Overdue"
+          value={fmtAmt(s.overdue_amount ?? 0)}
+          color={C.red}
+          sub={s.overdue_count > 0 ? `${s.overdue_count} invoice${s.overdue_count !== 1 ? "s" : ""}` : "None overdue"}
+          onClick={() => onNavigate("billing")}
+        />
       </div>
 
-      {/* Order stats */}
-      {stats?.orders && (
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-          <StatCard label="Orders Open" value={stats.orders.open || 0} color={C.accent} />
-          <StatCard label="Orders Confirmed" value={stats.orders.confirmed || 0} color={C.blue} />
-          <StatCard label="Orders Completed" value={stats.orders.completed || 0} color={C.green} />
-          <StatCard label="Orders Total" value={stats.orders.total || 0} color={C.text} />
-        </div>
-      )}
+      {/* Row 2: Transactions */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginBottom: 12 }}>
+        <StatCard
+          label="Delivered"
+          value={s.total_deliveries ?? 0}
+          color={C.green}
+          onClick={() => onNavigate("tracking")}
+        />
+        <StatCard
+          label="Returned"
+          value={s.total_returns ?? 0}
+          color={C.blue}
+          onClick={() => onNavigate("tracking")}
+        />
+        <StatCard
+          label="Returned Other"
+          value={s.total_return_other ?? 0}
+          color="#a855f7"
+          onClick={() => onNavigate("tracking")}
+        />
+        <StatCard
+          label="Failed Deliveries"
+          value={s.failed_deliveries ?? 0}
+          color={C.red}
+          sub={s.failed_deliveries_amount > 0 ? fmtMoney(s.failed_deliveries_amount) : undefined}
+          onClick={() => onNavigate("optimoroute")}
+        />
+      </div>
 
-      {stats?.optimoroute?.last_sync && (
-        <Card>
-          <div style={{ fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>{Icons.sync} OptimoRoute</div>
+      {/* OptimoRoute sync info */}
+      {s.optimoroute?.last_sync && (
+        <Card style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>{Icons.sync} OptimoRoute</div>
           <div style={{ fontSize: 13, color: C.muted }}>
-            Last sync: {fmtDateTime(stats.optimoroute.last_sync.created)} · {stats.optimoroute.total_imported} total imported
+            Last sync: {fmtDateTime(s.optimoroute.last_sync.created)} · {s.optimoroute.total_imported} total imported
           </div>
         </Card>
       )}
 
-      {/* Recent Orders */}
-      {stats?.orders?.recent?.length > 0 && (
-        <Card>
-          <div style={{ fontWeight: 700, marginBottom: 12 }}>Recent Orders</div>
-          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["Date", "Customer", "Order", "Unit $", "Total $", "Payment", "Status"].map(h => (
-                  <th key={h} style={{ textAlign: "left", padding: "4px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {stats.orders.recent.map(o => (
-                <tr key={o.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                  <td style={{ padding: "4px 8px" }}>{o.order_date}</td>
-                  <td style={{ padding: "4px 8px", fontWeight: 600 }}>{o.customer_name || o.customer_name_lookup || o.address || "—"}</td>
-                  <td style={{ padding: "4px 8px" }}>{o.order_detail || "—"}</td>
-                  <td style={{ padding: "4px 8px" }}>{o.unit_price ? fmtCurrency(o.unit_price) : "—"}</td>
-                  <td style={{ padding: "4px 8px", color: C.green, fontWeight: 600 }} title="Includes GST">{o.total_price ? fmtMoney(o.total_price) : "—"}</td>
-                  <td style={{ padding: "4px 8px" }}>{o.payment || "—"}</td>
-                  <td style={{ padding: "4px 8px" }}>
-                    {(() => {
-                      const ss = orderStatusStyle(o.status);
-                      return <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: ss.bg, color: ss.fg }}>{ss.label}</span>;
-                    })()}
-                    {o.optimoroute_id && <span style={{ padding: "2px 5px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: "#8b5cf622", color: C.purple, marginLeft: 4 }}>OR</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
-
-      {stats?.recent_transactions?.length > 0 && (
-        <Card>
-          <div style={{ fontWeight: 700, marginBottom: 12 }}>Recent Transactions</div>
-          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["Date", "Type", "Qty", "Source", "Notes"].map(h => (
-                  <th key={h} style={{ textAlign: "left", padding: "4px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {stats.recent_transactions.map(tx => (
-                <tr key={tx.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                  <td style={{ padding: "4px 8px" }}>{tx.date}</td>
-                  <td style={{ padding: "4px 8px" }}>
-                    <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: tx.type === "delivery" ? "#22c55e22" : tx.type === "return" ? "#ef444422" : "#3b82f622", color: tx.type === "delivery" ? C.green : tx.type === "return" ? C.red : C.blue }}>
-                      {tx.type}
-                    </span>
-                  </td>
-                  <td style={{ padding: "4px 8px" }}>{tx.qty}</td>
-                  <td style={{ padding: "4px 8px" }}>
-                    {tx.source === "optimoroute" ? (
-                      <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#8b5cf622", color: C.purple }}>OptimoRoute</span>
-                    ) : (
-                      <span style={{ color: C.muted, fontSize: 11 }}>manual</span>
-                    )}
-                  </td>
-                  <td style={{ padding: "4px 8px", color: C.muted, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.notes}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
     </div>
   );
 }
@@ -1319,7 +1318,7 @@ function RecordPaymentModal({ openInvoices, customerId, onClose, onDone, showToa
   );
 }
 
-function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderTypes, userRole, emailEnabled, emailConfig }) {
+function CustomersView({ customers, reload, showToast, onOpenOrder, onOpenEasyOrder, cylinderTypes, userRole, emailEnabled, emailConfig, openCustomerId, onOpenCustomerHandled }) {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY_CUSTOMER_FORM);
   const [search, setSearch] = useState("");
@@ -1332,6 +1331,14 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
       .then(all => setArchivedList((all || []).filter(c => c.archived)))
       .catch(() => {});
   }, [showArchived]);
+
+  useEffect(() => {
+    if (!openCustomerId || !customers) return;
+    const c = customers.find(x => x.id === openCustomerId);
+    if (c) startEdit(c);
+    if (onOpenCustomerHandled) onOpenCustomerHandled();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCustomerId, customers]);
 
   const startEdit = (c) => {
     setEditing(c?.id || "new");
@@ -1888,6 +1895,7 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
                       </button>
                     )}
                     {onOpenOrder && <button onClick={() => onOpenOrder(null, editing)} style={{ ...btnStyle(C.green), padding: "4px 12px", fontSize: 11, fontWeight: 700, textTransform: "none", letterSpacing: 0 }}>+ New Order</button>}
+                    {onOpenEasyOrder && <button onClick={() => onOpenEasyOrder(editing)} style={{ ...btnStyle(C.accent), padding: "4px 12px", fontSize: 11, fontWeight: 700, textTransform: "none", letterSpacing: 0 }}>⚡ Easy Order</button>}
                   </div>
                 </div>
 <div style={{ gridColumn: "1/-1" }}>
@@ -1908,7 +1916,7 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
                           {custOrders.map(o => (
                             <tr
                               key={o.id}
-                              onClick={() => onOpenOrder && onOpenOrder(o.id)}
+                              onClick={() => onOpenOrder && onOpenOrder(o.id, null, editing)}
                               style={{ borderBottom: `1px solid ${C.border}`, cursor: onOpenOrder ? "pointer" : "default" }}
                               title={onOpenOrder ? "Click to open in Orders" : ""}
                             >
@@ -2028,9 +2036,13 @@ function CustomersView({ customers, reload, showToast, onOpenOrder, cylinderType
                 background: missingCompliance ? "#ef444415" : "transparent",
                 borderLeft: missingCompliance ? `3px solid ${C.red}` : "3px solid transparent",
               }}>
-                <td style={{ padding: "8px", color: C.accent, fontWeight: 600 }}>{c.account_number || "—"}</td>
+                <td style={{ padding: "8px" }}>
+                  <button onClick={() => startEdit(c)} style={{ background: "none", border: "none", padding: 0, color: C.accent, fontWeight: 700, fontSize: 12, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2 }}>{c.account_number || "—"}</button>
+                </td>
                 <td style={{ padding: "8px", color: C.accent, fontWeight: 500 }}>{c.address || "—"}</td>
-                <td style={{ padding: "8px", fontWeight: 600 }}>{c.name}</td>
+                <td style={{ padding: "8px" }}>
+                  <button onClick={() => startEdit(c)} style={{ background: "none", border: "none", padding: 0, color: C.text, fontWeight: 600, fontSize: 12, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2 }}>{c.name}</button>
+                </td>
                 <td style={{ padding: "8px" }}>{c.contact}</td>
                 <td style={{ padding: "8px" }}>{c.phone}</td>
                 <td style={{ padding: "8px" }}>{c.state || "—"}</td>
@@ -2101,9 +2113,21 @@ function CylinderTypesView({ cylinderTypes, reload, showToast }) {
       </div>
       {editing && (
         <Card style={{ marginBottom: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 12 }}>
             <div><label style={labelStyle}>Label *</label><input value={form.label} onChange={e => setForm(p => ({ ...p, label: e.target.value }))} style={inputStyle} /></div>
-            <div><label style={labelStyle}>Default Price</label><input type="number" step="0.01" value={form.default_price} onChange={e => setForm(p => ({ ...p, default_price: parseFloat(e.target.value) || 0 }))} style={inputStyle} /></div>
+            <div>
+              <label style={labelStyle}>Price (exc GST)</label>
+              <input type="number" step="0.01" value={form.default_price} onChange={e => setForm(p => ({ ...p, default_price: parseFloat(e.target.value) || 0 }))} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Price (inc GST)</label>
+              <input
+                type="number" step="0.01"
+                value={Math.round((form.default_price || 0) * 1.1 * 100) / 100}
+                onChange={e => setForm(p => ({ ...p, default_price: Math.round((parseFloat(e.target.value) || 0) / 1.1 * 10000) / 10000 }))}
+                style={inputStyle}
+              />
+            </div>
             <div><label style={labelStyle}>Gas Group</label><input value={form.gas_group} onChange={e => setForm(p => ({ ...p, gas_group: e.target.value }))} style={inputStyle} /></div>
             <div>
               <label style={labelStyle}>Item Type</label>
@@ -2314,12 +2338,17 @@ function DeliveryView({ customers, cylinderTypes, showToast, refreshAll }) {
 }
 
 // ==================== TRACKING VIEW ====================
-function TrackingView({ customers, cylinderTypes }) {
+function TrackingView({ customers, cylinderTypes, showToast }) {
+  const [tab, setTab] = useState("onhand"); // onhand | history | returnother
   const [filter, setFilter] = useState("");
   const [filterQuery, setFilterQuery] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
   const onHand = useApi(() => api.getOnHand());
   const txs = useApi(() => api.getTransactions(filter ? { customer_id: filter, limit: 50 } : { limit: 50 }), [filter]);
+  const rothSummary = useApi(() => api.getReturnOtherSummary(), []);
+  const [returningId, setReturningId] = useState(null); // "owner|ctId" being confirmed
+  const [returnQtys, setReturnQtys] = useState({}); // key: "owner|ctId" → qty string
+  const [returnDate, setReturnDate] = useState(() => new Date().toISOString().split("T")[0]);
 
   // 3.0.18: fetch customers locally as a fallback when the parent-provided prop is empty
   // (e.g. on first mount before the global customers hook resolves). Keeps the dropdown
@@ -2359,11 +2388,45 @@ function TrackingView({ customers, cylinderTypes }) {
       })()
     : "";
 
+  const doReturnToOwner = async (row) => {
+    const key = `${row.foreign_owner}|${row.cylinder_type}`;
+    const qty = parseInt(returnQtys[key]) || row.qty_held;
+    if (!(qty > 0) || qty > row.qty_held) {
+      showToast(`Qty must be between 1 and ${row.qty_held}`, "error");
+      return;
+    }
+    try {
+      await api.returnToOwner({ foreign_owner: row.foreign_owner, cylinder_type: row.cylinder_type, qty, date: returnDate });
+      showToast(`Returned ${qty} × ${row.cylinder_label} to ${row.foreign_owner}`);
+      rothSummary.reload?.();
+      setReturningId(null);
+      setReturnQtys(p => { const n = { ...p }; delete n[key]; return n; });
+    } catch (e) { showToast(e.message, "error"); }
+  };
+
   return (
     <div>
-      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Cylinder Tracking</h2>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 12 }}>Cylinder Tracking</h2>
 
-      {/* 3.0.18: autocomplete customer filter — searches name, address, account # and contact */}
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {[
+          { id: "onhand",      label: "On-Hand Summary" },
+          { id: "history",     label: "Transaction History" },
+          { id: "returnother", label: `Returned Other${rothSummary.data?.length ? ` (${rothSummary.data.length})` : ""}` },
+        ].map(t => {
+          const active = tab === t.id;
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none",
+              background: active ? C.accent : C.input, color: active ? "#fff" : C.muted,
+            }}>{t.label}</button>
+          );
+        })}
+      </div>
+
+      {/* Customer filter — shown for on-hand and history tabs only */}
+      {(tab === "onhand" || tab === "history") && (
       <div style={{ position: "relative", maxWidth: 420, marginBottom: 16 }}>
         <input
           placeholder="All customers — type to search by name, address or account #"
@@ -2398,50 +2461,113 @@ function TrackingView({ customers, cylinderTypes }) {
           </div>
         )}
       </div>
+      )}
 
-      <Card>
-        <div style={{ fontWeight: 700, marginBottom: 12 }}>On-Hand Summary</div>
-        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-          <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-            {["Customer", "Cylinder Type", "On-Hand"].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
-          </tr></thead>
-          <tbody>
-            {(onHand.data || []).filter(r => !filter || r.customer_id === filter).map((r, i) => (
-              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "6px 8px" }}>{formatCustomerDisplay(customerMap[r.customer_id]) || r.customer_name || r.address || r.customer_id}</td>
-                <td style={{ padding: "6px 8px" }}>{r.cylinder_label || ctMap[r.cylinder_type]?.label || r.cylinder_type}</td>
-                <td style={{ padding: "6px 8px", fontWeight: 700, color: r.on_hand > 0 ? C.accent : C.green }}>{r.on_hand}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      {tab === "onhand" && (
+        <Card>
+          <div style={{ fontWeight: 700, marginBottom: 12 }}>On-Hand Summary</div>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {["Customer", "Cylinder Type", "On-Hand"].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {(onHand.data || []).filter(r => !filter || r.customer_id === filter).map((r, i) => (
+                <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: "6px 8px" }}>{formatCustomerDisplay(customerMap[r.customer_id]) || r.customer_name || r.address || r.customer_id}</td>
+                  <td style={{ padding: "6px 8px" }}>{r.cylinder_label || ctMap[r.cylinder_type]?.label || r.cylinder_type}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 700, color: r.on_hand > 0 ? C.accent : C.green }}>{r.on_hand}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
 
-      <Card>
-        <div style={{ fontWeight: 700, marginBottom: 12 }}>Transaction History</div>
-        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-          <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
-            {["Date", "Customer", "Type", "Cylinder", "Qty", "Source", "Notes"].map(h => <th key={h} style={{ textAlign: "left", padding: "4px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
-          </tr></thead>
-          <tbody>
-            {filteredTxs.map(tx => (
-              <tr key={tx.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "4px 8px" }}>{tx.date}</td>
-                <td style={{ padding: "4px 8px" }}>{formatCustomerDisplay(customerMap[tx.customer_id]) || tx.customer_name || tx.address || "?"}</td>
-                <td style={{ padding: "4px 8px" }}>
-                  <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: tx.type === "delivery" ? "#22c55e22" : "#ef444422", color: tx.type === "delivery" ? C.green : C.red }}>{tx.type}</span>
-                </td>
-                <td style={{ padding: "4px 8px" }}>{ctMap[tx.cylinder_type]?.label || "?"}</td>
-                <td style={{ padding: "4px 8px", fontWeight: 600 }}>{tx.qty}</td>
-                <td style={{ padding: "4px 8px" }}>
-                  {tx.source === "optimoroute" ? <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#8b5cf622", color: C.purple }}>OR</span> : <span style={{ color: C.muted, fontSize: 11 }}>manual</span>}
-                </td>
-                <td style={{ padding: "4px 8px", color: C.muted, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.notes}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      {tab === "history" && (
+        <Card>
+          <div style={{ fontWeight: 700, marginBottom: 12 }}>Transaction History</div>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {["Date", "Customer", "Type", "Cylinder", "Qty", "Source", "Notes"].map(h => <th key={h} style={{ textAlign: "left", padding: "4px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {filteredTxs.map(tx => (
+                <tr key={tx.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: "4px 8px" }}>{tx.date}</td>
+                  <td style={{ padding: "4px 8px" }}>{formatCustomerDisplay(customerMap[tx.customer_id]) || tx.customer_name || tx.address || "?"}</td>
+                  <td style={{ padding: "4px 8px" }}>
+                    <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: tx.type === "delivery" ? "#22c55e22" : "#ef444422", color: tx.type === "delivery" ? C.green : C.red }}>{tx.type}</span>
+                  </td>
+                  <td style={{ padding: "4px 8px" }}>{ctMap[tx.cylinder_type]?.label || "?"}</td>
+                  <td style={{ padding: "4px 8px", fontWeight: 600 }}>{tx.qty}</td>
+                  <td style={{ padding: "4px 8px" }}>
+                    {tx.source === "optimoroute" ? <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#8b5cf622", color: C.purple }}>OR</span> : <span style={{ color: C.muted, fontSize: 11 }}>manual</span>}
+                  </td>
+                  <td style={{ padding: "4px 8px", color: C.muted, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.notes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {tab === "returnother" && (
+        <Card>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Competitor Cylinders on Hand</div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>
+            These are cylinders collected from customers that belong to other companies. Use "Return to Owner" to record when you send them back.
+          </div>
+
+          {/* Return date picker */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <label style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Return date:</label>
+            <input type="date" value={returnDate} onChange={e => setReturnDate(e.target.value)}
+              style={{ ...inputStyle, width: 160, padding: "4px 8px" }} />
+          </div>
+
+          {(rothSummary.data || []).length === 0 ? (
+            <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: 24 }}>No competitor cylinders currently on hand.</div>
+          ) : (
+            <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  {["Owner", "Cylinder Type", "Qty on Hand", "Return Qty", ""].map(h => (
+                    <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(rothSummary.data || []).map(row => {
+                  const key = `${row.foreign_owner}|${row.cylinder_type}`;
+                  return (
+                    <tr key={key} style={{ borderBottom: `1px solid ${C.border}` }}>
+                      <td style={{ padding: "8px", fontWeight: 600 }}>{row.foreign_owner}</td>
+                      <td style={{ padding: "8px" }}>{row.cylinder_label || row.cylinder_type}</td>
+                      <td style={{ padding: "8px", fontWeight: 700, color: "#a855f7" }}>{row.qty_held}</td>
+                      <td style={{ padding: "8px" }}>
+                        <input
+                          type="number" min="1" max={row.qty_held}
+                          value={returnQtys[key] ?? row.qty_held}
+                          onChange={e => setReturnQtys(p => ({ ...p, [key]: e.target.value }))}
+                          style={{ ...inputStyle, width: 70, padding: "3px 6px" }}
+                        />
+                      </td>
+                      <td style={{ padding: "8px" }}>
+                        <button
+                          onClick={() => doReturnToOwner(row)}
+                          style={{ ...btnStyle(C.green), padding: "4px 12px", fontSize: 11, fontWeight: 700, textTransform: "none", letterSpacing: 0 }}
+                        >
+                          Return to Owner
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      )}
     </div>
   );
 }
@@ -2613,6 +2739,7 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
   const [invoice, setInvoice] = useState(null);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: "", method: "manual", reference: "", date: today, notes: "" });
+  const [stripeLoading, setStripeLoading] = useState(false);
 
   const customerMap = useMemo(() => {
     const m = {};
@@ -2629,6 +2756,11 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
     api.getInvoice(invoiceId).then(d => { if (active) setInvoice(d); }).catch(() => {});
     return () => { active = false; };
   }, [invoiceId]);
+
+  const invCustomer = invoice ? (customerMap[invoice.customer_id] || {}) : {};
+  const invIsCommercial = (invCustomer.customer_category || "").toLowerCase() === "commercial";
+  const invPrice = (net) => invIsCommercial ? fmtCurrency(net) : fmtCurrency(grossOf(net));
+  const invPriceLabel = invIsCommercial ? "ex GST" : "inc GST";
 
   const recordPayment = async () => {
     const amt = parseFloat(paymentForm.amount);
@@ -2675,6 +2807,26 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                 }} style={{ ...btnStyle(C.green), padding: "6px 12px", fontSize: 12 }}>Send Email</button>
               );
             })()}
+            {invoice && invoice.status !== "paid" && (
+              invoice.stripe_checkout_url ? (
+                <button onClick={() => { navigator.clipboard?.writeText(invoice.stripe_checkout_url); showToast("Payment link copied!"); }}
+                  style={{ ...btnStyle(C.blue), padding: "6px 12px", fontSize: 12 }}>Copy Pay Link</button>
+              ) : (
+                <button onClick={async () => {
+                  setStripeLoading(true);
+                  try {
+                    const r = await api.createStripeCheckout(invoice.id);
+                    const updated = await api.getInvoice(invoice.id);
+                    setInvoice(updated);
+                    showToast("Payment link created");
+                    if (r.checkout_url) { navigator.clipboard?.writeText(r.checkout_url); showToast("Link copied to clipboard"); }
+                  } catch (e) { showToast(e.message, "error"); }
+                  finally { setStripeLoading(false); }
+                }} disabled={stripeLoading} style={{ ...btnStyle(C.blue), padding: "6px 12px", fontSize: 12, opacity: stripeLoading ? 0.6 : 1 }}>
+                  {stripeLoading ? "Generating…" : "Generate Pay Link"}
+                </button>
+              )
+            )}
             {invoice && (
               <button onClick={() => window.open(`/api/invoices/${invoice.id}/print`, "_blank")} style={{ ...btnStyle("#6b7280"), padding: "6px 12px", fontSize: 12 }}>Print / PDF</button>
             )}
@@ -2710,10 +2862,20 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                 <div style={{ marginTop: 2 }}>{statusBadge(invoice.status)}</div>
               </div>
               <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Subtotal (net)</div>
-                <div style={{ fontSize: 13, color: C.text }}>{fmtCurrency(invoice.total)}</div>
-                <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>+ GST {fmtCurrency(Math.round((invoice.total || 0) * 0.10 * 100) / 100)}</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginTop: 4 }}>{fmtMoney(invoice.total)} <span style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>inc GST</span></div>
+                {invIsCommercial ? (
+                  <>
+                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Subtotal (excl. GST)</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{fmtCurrency(invoice.total)}</div>
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>+ GST {fmtCurrency(Math.round((invoice.total || 0) * 0.10 * 100) / 100)}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginTop: 4 }}>{fmtMoney(invoice.total)} <span style={{ fontSize: 10, color: C.muted, fontWeight: 400 }}>total inc GST</span></div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Total (incl. GST)</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{fmtMoney(invoice.total)}</div>
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>Includes GST of {fmtCurrency(Math.round((invoice.total || 0) * 0.10 * 100) / 100)}</div>
+                  </>
+                )}
               </div>
               <div>
                 <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Paid (inc GST)</div>
@@ -2724,6 +2886,16 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                 </div>
               </div>
             </div>
+
+            {/* Stripe payment link */}
+            {invoice.stripe_checkout_url && invoice.status !== "paid" && (
+              <div style={{ marginBottom: 16, padding: "10px 14px", background: "#1d4ed808", border: `1px solid ${C.blue}44`, borderRadius: 6, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: C.blue, fontWeight: 600 }}>Pay Now link:</span>
+                <a href={invoice.stripe_checkout_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: C.blue, wordBreak: "break-all" }}>{invoice.stripe_checkout_url}</a>
+                <button onClick={() => { navigator.clipboard?.writeText(invoice.stripe_checkout_url); showToast("Copied!"); }}
+                  style={{ background: "none", border: `1px solid ${C.blue}`, color: C.blue, borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer" }}>Copy</button>
+              </div>
+            )}
 
             {/* Linked Orders */}
             {invoice.orderSections?.length > 0 && (
@@ -2743,8 +2915,8 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                           <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
                             <th style={{ textAlign: "left", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Item</th>
                             <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Qty</th>
-                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Unit Price</th>
-                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Total</th>
+                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Unit Price ({invPriceLabel})</th>
+                            <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Total ({invPriceLabel})</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2752,8 +2924,8 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                             <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
                               <td style={{ padding: "5px 10px", fontWeight: 600 }}>{l.cylinder_label || "—"}</td>
                               <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.qty}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right" }}>{invPrice(l.unit_price)}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{invPrice(l.line_total)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -2775,8 +2947,8 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                     <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
                       <th style={{ textAlign: "left", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Cylinder</th>
                       <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Qty on Hand</th>
-                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Rate</th>
-                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Charge</th>
+                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Rate ({invPriceLabel})</th>
+                      <th style={{ textAlign: "right", padding: "5px 10px", color: C.muted, fontWeight: 600 }}>Charge ({invPriceLabel})</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2784,8 +2956,8 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                       <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
                         <td style={{ padding: "5px 10px", fontWeight: 600 }}>{l.cylinder_label || l.notes || "—"}</td>
                         <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.qty != null ? l.qty : "—"}</td>
-                        <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.unit_price != null ? fmtCurrency(l.unit_price) : "—"}</td>
-                        <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total != null ? l.line_total : l.amount)}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right" }}>{l.unit_price != null ? invPrice(l.unit_price) : "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600 }}>{invPrice(l.line_total != null ? l.line_total : l.amount)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -2802,8 +2974,8 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                     <tr style={{ background: C.panel, borderBottom: `1px solid ${C.border}` }}>
                       <th style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Item</th>
                       <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Qty</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Unit Price</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Line Total</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Unit Price ({invPriceLabel})</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>Line Total ({invPriceLabel})</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2811,8 +2983,8 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
                       <tr key={l.id || i} style={{ borderBottom: `1px solid ${C.border}` }}>
                         <td style={{ padding: "6px 8px", fontWeight: 600 }}>{l.cylinder_label || "—"}</td>
                         <td style={{ padding: "6px 8px", textAlign: "right" }}>{l.qty}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtCurrency(l.unit_price)}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{fmtCurrency(l.line_total)}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{invPrice(l.unit_price)}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{invPrice(l.line_total)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -2906,7 +3078,7 @@ function InvoiceDetailModal({ invoiceId, customers, emailEnabled, emailConfig, s
   );
 }
 
-function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, emailEnabled, emailConfig }) {
+function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, emailEnabled, emailConfig, onOpenCustomer }) {
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
     d.setDate(1);
@@ -2917,6 +3089,7 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState(null); // for InvoiceDetailModal
+  const [bulkSending, setBulkSending] = useState(false);
 
   const customerMap = useMemo(() => {
     const m = {};
@@ -3019,21 +3192,30 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
         <div key={g.customer_id} style={{ marginBottom: 16, padding: 12, background: C.input, borderRadius: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <div style={{ fontWeight: 600 }}>
-              {g.account_number && <span style={{ color: C.accent, marginRight: 8 }}>{g.account_number}</span>}
-              {g.customer_name}
+              {g.account_number && (
+                <button onClick={() => onOpenCustomer && onOpenCustomer(g.customer_id)} style={{ background: "none", border: "none", padding: 0, color: C.accent, fontWeight: 700, fontSize: 13, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, marginRight: 8 }}>{g.account_number}</button>
+              )}
+              <button onClick={() => onOpenCustomer && onOpenCustomer(g.customer_id)} style={{ background: "none", border: "none", padding: 0, color: C.text, fontWeight: 600, fontSize: 13, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2 }}>{g.customer_name}</button>
               {g.category && <span style={{ marginLeft: 8, padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 600, background: C.panel, color: C.muted }}>{g.category}</span>}
             </div>
-            <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
-              <span style={{ color: C.muted }}>Total <strong style={{ color: C.text }}>{fmtMoney(g.total)}</strong></span>
-              <span style={{ color: C.muted }}>Paid <strong style={{ color: C.green }}>{fmtMoney(g.paid)}</strong></span>
-              <span style={{ color: C.muted }}>Owed <strong style={{ color: g.owed > 0 ? C.red : C.muted }}>{fmtMoney(g.owed)}</strong></span>
-              <span style={{ color: C.muted, fontSize: 10 }}>(inc GST)</span>
-            </div>
+            {(() => {
+              const gIsComm = (g.category || "").toLowerCase() === "commercial";
+              const gFmt = (v) => gIsComm ? fmtCurrency(v) : fmtMoney(v);
+              const gLabel = gIsComm ? "ex GST" : "inc GST";
+              return (
+                <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
+                  <span style={{ color: C.muted }}>Total <strong style={{ color: C.text }}>{gFmt(g.total)}</strong></span>
+                  <span style={{ color: C.muted }}>Paid <strong style={{ color: C.green }}>{gFmt(g.paid)}</strong></span>
+                  <span style={{ color: C.muted }}>Owed <strong style={{ color: g.owed > 0 ? C.red : C.muted }}>{gFmt(g.owed)}</strong></span>
+                  <span style={{ color: C.muted, fontSize: 10 }}>({gLabel})</span>
+                </div>
+              );
+            })()}
           </div>
           <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["Invoice #", "Date", "Due Date", "PO#", "Total", "Paid", "Owed", "Status", ""].map(h => (
+                {["Invoice #", "Date", "Due Date", "PO#", "Total", "Paid", "Owed", "Status"].map(h => (
                   <th key={h} style={{ textAlign: "left", padding: "4px 6px", color: C.muted, fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
@@ -3044,19 +3226,25 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
                 const overdue = inv.due_date && inv.due_date < new Date().toISOString().split("T")[0] && inv.status === "open";
                 return (
                   <tr key={inv.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                    <td style={{ padding: "4px 6px", color: C.accent, fontWeight: 600 }}>{inv.invoice_number || "—"}</td>
+                    <td style={{ padding: "4px 6px" }}>
+                      <button onClick={() => setSelectedInvoice(inv)} style={{ background: "none", border: "none", padding: 0, color: C.accent, fontWeight: 700, fontSize: 11, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2 }}>{inv.invoice_number || "—"}</button>
+                    </td>
                     <td style={{ padding: "4px 6px" }}>{inv.invoice_date}</td>
                     <td style={{ padding: "4px 6px", color: overdue ? C.red : C.text, fontWeight: overdue ? 700 : 400 }}>{inv.due_date || "—"}</td>
                     <td style={{ padding: "4px 6px", color: C.muted }}>{inv.po_number || "—"}</td>
-                    <td style={{ padding: "4px 6px", fontWeight: 600 }} title="Includes GST">{fmtMoney(inv.total)}</td>
-                    <td style={{ padding: "4px 6px", color: C.green }} title="Includes GST">{fmtMoney(inv.amount_paid)}</td>
-                    <td style={{ padding: "4px 6px", color: owed > 0 && inv.status !== "void" ? C.red : C.muted }} title="Includes GST">
-                      {inv.status === "void" ? "—" : fmtMoney(owed)}
-                    </td>
+                    {(() => {
+                      const rIsComm = (g.category || "").toLowerCase() === "commercial";
+                      const rFmt = (v) => rIsComm ? fmtCurrency(v) : fmtMoney(v);
+                      const rLabel = rIsComm ? "ex GST" : "inc GST";
+                      return (<>
+                        <td style={{ padding: "4px 6px", fontWeight: 600 }} title={rLabel}>{rFmt(inv.total)}</td>
+                        <td style={{ padding: "4px 6px", color: C.green }} title={rLabel}>{rFmt(inv.amount_paid)}</td>
+                        <td style={{ padding: "4px 6px", color: owed > 0 && inv.status !== "void" ? C.red : C.muted }} title={rLabel}>
+                          {inv.status === "void" ? "—" : rFmt(owed)}
+                        </td>
+                      </>);
+                    })()}
                     <td style={{ padding: "4px 6px" }}>{statusBadge(inv.status)}</td>
-                    <td style={{ padding: "4px 6px" }}>
-                      <button onClick={() => setSelectedInvoice(inv)} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 11 }}>View</button>
-                    </td>
                   </tr>
                 );
               })}
@@ -3067,11 +3255,27 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
     </Card>
   );
 
+  const openInvoices = invoices.filter(inv => inv.status === "open");
+
+  const bulkSendAll = async () => {
+    if (!emailEnabled) { showToast("Email not configured", "error"); return; }
+    if (openInvoices.length === 0) { showToast("No open invoices to send in this period", "error"); return; }
+    if (!window.confirm(`Send emails for all ${openInvoices.length} open invoice(s) in the current period?`)) return;
+    setBulkSending(true);
+    try {
+      const ids = openInvoices.map(i => i.id);
+      const r = await api.sendInvoiceEmailBulk(ids);
+      showToast(`Sent ${r.sent} / ${r.total} invoice email(s)${r.failed > 0 ? ` (${r.failed} failed)` : ""}`);
+    } catch (e) {
+      showToast(e.message || "Bulk send failed", "error");
+    } finally {
+      setBulkSending(false);
+    }
+  };
+
   return (
     <div>
-      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Billing</h2>
-
-      <RentalSchedulerControls customers={customers} showToast={showToast || (() => {})} onComplete={load} />
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Invoicing</h2>
 
       <Card style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -3115,6 +3319,14 @@ function BillingView({ customers, cylinderTypes, showToast, reloadCustomers, ema
             </div>
           </div>
           <button onClick={load} style={btnStyle(C.blue)}>{loading ? "Loading..." : "Refresh"}</button>
+          <button
+            onClick={bulkSendAll}
+            disabled={bulkSending || openInvoices.length === 0}
+            style={{ ...btnStyle(C.green), opacity: (bulkSending || openInvoices.length === 0) ? 0.5 : 1 }}
+            title={emailEnabled ? `Email all ${openInvoices.length} open invoice(s) in this period` : "Email not configured — add RESEND_API_KEY in settings"}
+          >
+            {bulkSending ? "Sending…" : `Email All Open (${openInvoices.length})`}
+          </button>
         </div>
         <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
           Reads directly from the invoices table — includes order invoices and auto-generated rental cycle invoices.
@@ -3379,7 +3591,7 @@ function RentalHistoryView({ customers, cylinderTypes, showToast, emailEnabled, 
         <h2 style={{ fontSize: 20, fontWeight: 700 }}>Rental History</h2>
       </div>
 
-      <RentalSchedulerControls customers={customers} showToast={showToast} onComplete={() => { loadHistory(); loadGenData(); }} />
+      <RentalSchedulerControls customers={effectiveCustomers} showToast={showToast} onComplete={() => { loadHistory(); loadGenData(); }} />
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         {tabBtn("history", "History")}
@@ -3993,8 +4205,9 @@ function CompletionHistoryPanel({ orderId, lines }) {
 }
 
 // ==================== ORDERS VIEW ====================
-function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pendingOrderId, onPendingOrderHandled, pendingNewOrderCustomerId, onPendingNewOrderHandled, emailEnabled, emailConfig }) {
+function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pendingOrderId, onPendingOrderHandled, pendingNewOrderCustomerId, onPendingNewOrderHandled, emailEnabled, emailConfig, onReturnToCustomer }) {
   const [orders, setOrders] = useState([]);
+  const [orderViewFilter, setOrderViewFilter] = useState("open"); // open | dispatching | invoiced
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
@@ -4008,15 +4221,25 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
     qty: 1, unit_price: 0, total_price: 0, notes: "",
     order_date: new Date().toISOString().split("T")[0], payment: "", payment_ref: "",
     collection: false, paid: false, po_number: "", duration: 5, payment_amount: 0,
+    scheduled_date: "",
     lines: [], // multi-line: [{ cylinder_type_id, cylinder_label, qty, unit_price, line_total, is_fixed, original_price }]
   };
   const [form, setForm] = useState({ ...emptyForm });
   const [priceLines, setPriceLines] = useState([]); // multi-item breakdown (raw from lookup)
   const [showLineEditor, setShowLineEditor] = useState(false);
   const [newCust, setNewCust] = useState({ name: "", contact: "", phone: "", email: "", address: "", payment_ref: "" });
+  const [orSyncing, setOrSyncing] = useState(new Set());
+
+  const customerMap = useMemo(() => {
+    const m = {};
+    for (const c of (customers || [])) m[c.id] = c;
+    return m;
+  }, [customers]);
+
+  const formCustomerIsCommercial = (customerMap[form.customer_id]?.customer_category || "").toLowerCase() === "commercial";
 
   const loadOrders = async () => {
-    try { setOrders(await api.getOrders({ limit: 100 })); } catch(e) {}
+    try { setOrders(await api.getOrders({ limit: 500 })); } catch(e) {}
   };
   useEffect(() => { loadOrders(); }, []);
 
@@ -4232,6 +4455,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
           showToast("Order updated");
         }
         setEditing(null);
+        setCreating(false);
       } else {
         const r = await api.createOrder(form);
         if (r?.push_attempted && !r.push_success) {
@@ -4283,6 +4507,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
       payment: o.payment || "", payment_ref: o.payment_ref || "",
       collection: !!o.collection, paid: !!o.paid, po_number: o.po_number || "", duration: o.duration || 5,
       payment_amount: parseFloat(o.payment_amount) || 0,
+      scheduled_date: o.scheduled_date || "",
       lines,
       // 3.0.10: stash the order's status so the manual completion panel can show/hide
       _editing_order_id: o.id,
@@ -4290,16 +4515,21 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
       _editing_status: o.status || "",
     });
     // Build priceLines display from order lines so the table shows right away
-    setPriceLines(lines.map(l => ({
-      raw: `${l.qty}× ${l.cylinder_label}`,
-      matched: true,
-      cylinder_label: l.cylinder_label,
-      cylinder_type_id: l.cylinder_type_id,
-      qty: l.qty,
-      unit_price: l.unit_price,
-      line_total: l.line_total,
-      is_fixed: false,
-    })));
+    setPriceLines(lines.map(l => {
+      const effectiveQty = (l.delivered_qty > 0) ? l.delivered_qty : l.qty;
+      const effectiveTotal = Math.round(effectiveQty * (l.unit_price || 0) * 100) / 100;
+      return {
+        raw: `${l.qty}× ${l.cylinder_label}`,
+        matched: true,
+        cylinder_label: l.cylinder_label,
+        cylinder_type_id: l.cylinder_type_id,
+        qty: l.qty,
+        delivered_qty: l.delivered_qty || 0,
+        unit_price: l.unit_price,
+        line_total: effectiveTotal,
+        is_fixed: false,
+      };
+    }));
   };
 
   const matchCreditToOrder = async (orderId) => {
@@ -4356,15 +4586,27 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
     } catch (e) { showToast(e.message, "error"); }
   };
 
+  const VIEW_FILTER_STATUSES = {
+    open:        ["open"],
+    dispatching: ["open", "awaiting_dispatch", "dispatched"],
+    invoiced:    ["invoiced"],
+    all:         null, // null = no filter
+  };
+
   const filteredOrders = useMemo(() => {
     let list = orders;
-    // 3.0.11: When a customer is selected in the create/edit form, narrow the orders
-    // list at the bottom to that customer only. Stops the dispatcher seeing every
-    // order in the system while they're in the middle of editing one.
-    // `editing` is an id string (or "new"/null), so treat any truthy non-"new"
-    // value as an active edit session and apply the same narrowing.
+
+    // Status view filter — skipped when a search term is active (search across all)
     const isEditingExisting = editing && editing !== "new";
-    if ((creating || isEditingExisting) && form.customer_id) {
+    const narrowedByCustomer = (creating || isEditingExisting) && form.customer_id;
+    if (!narrowedByCustomer && !listCustomerFilter && !search) {
+      const allowed = VIEW_FILTER_STATUSES[orderViewFilter];
+      if (allowed !== null) list = list.filter(o => allowed.includes(o.status));
+    }
+
+    // 3.0.11: When a customer is selected in the create/edit form, narrow the orders
+    // list at the bottom to that customer only.
+    if (narrowedByCustomer) {
       list = list.filter(o => o.customer_id === form.customer_id);
     }
     // Explicit bottom-of-screen customer filter (independent of the form).
@@ -4382,12 +4624,17 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
       (o.customer_contact_lookup || "").toLowerCase().includes(s) ||
       (o.customer_phone_lookup || "").toLowerCase().includes(s)
     );
-  }, [orders, search, creating, editing, form.customer_id, listCustomerFilter]);
+  }, [orders, search, creating, editing, form.customer_id, listCustomerFilter, orderViewFilter]);
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 700 }}>Orders</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {onReturnToCustomer && (
+            <button onClick={() => { cancelEdit(); onReturnToCustomer(); }} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 600, padding: 0 }}>← Back to Customer</button>
+          )}
+          <h2 style={{ fontSize: 20, fontWeight: 700 }}>Orders</h2>
+        </div>
         <button onClick={() => { if (creating) cancelEdit(); else { setCreating(true); setEditing(null); setForm({ ...emptyForm }); } }} style={btnStyle()}>
           {creating ? "Cancel" : "+ New Order"}
         </button>
@@ -4396,7 +4643,10 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
       {/* CREATE / EDIT ORDER FORM */}
       {creating && (
         <Card style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, marginBottom: 12 }}>{editing ? "Edit Order" : "New Order"}</div>
+          <div style={{ fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 12 }}>
+            {editing ? "Edit Order" : "New Order"}
+            {editing && form._editing_order_number && <span style={{ fontWeight: 400, fontSize: 13, color: C.accent }}>{form._editing_order_number}</span>}
+          </div>
 
           {/* Customer search */}
           {!editing && (
@@ -4431,9 +4681,20 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
           )}
 
           {form.customer_id && (
-            <div style={{ padding: "6px 10px", background: "#22c55e15", borderRadius: 6, fontSize: 13, color: C.green, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ padding: "6px 10px", background: C.input, borderRadius: 6, fontSize: 13, color: C.text, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, border: `1px solid ${C.border}` }}>
               <span>Customer: <strong>{form.customer_name}</strong> — {form.address}</span>
-              {!editing && <button onClick={() => setForm(f => ({ ...f, customer_id: "", customer_name: "", address: "", payment_ref: "" }))} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer" }}>✕</button>}
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {(() => {
+                  const cust = (customers || []).find(c => c.id === form.customer_id);
+                  return cust?.cc_masked ? (
+                    <span style={{ fontSize: 12, color: C.text }}>
+                      <span style={{ color: C.muted, fontSize: 11, marginRight: 4 }}>CC on file:</span>
+                      <CCReveal customerId={form.customer_id} masked={cust.cc_masked} />
+                    </span>
+                  ) : null;
+                })()}
+                {!editing && <button onClick={() => setForm(f => ({ ...f, customer_id: "", customer_name: "", address: "", payment_ref: "" }))} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer" }}>✕</button>}
+              </div>
             </div>
           )}
 
@@ -4478,10 +4739,8 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                         }));
                       }}
                       style={{
-                        padding: "3px 10px", borderRadius: 12, fontSize: 11, cursor: "pointer", border: "none",
-                        background: ct.item_type === "cylinder" ? "#3b82f622" : "#f59e0b22",
-                        color: ct.item_type === "cylinder" ? C.blue : C.accent,
-                        fontWeight: 600,
+                        padding: "3px 10px", borderRadius: 12, fontSize: 11, cursor: "pointer",
+                        border: `1px solid ${C.border}`, background: C.panel, color: C.text, fontWeight: 400,
                       }}
                       title={`Add 1x${ct.label} (${ct.item_type === "cylinder" ? "rental" : "sale"})`}
                     >
@@ -4515,26 +4774,49 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                     {priceLines.map((line, i) => (
                       <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
                         <td style={{ padding: "6px 8px", fontFamily: "monospace" }}>{line.raw}</td>
-                        <td style={{ padding: "6px 8px", color: line.matched ? C.blue : C.red, fontWeight: 600 }}>
+                        <td style={{ padding: "6px 8px", color: line.matched ? C.text : C.red, fontWeight: line.matched ? 400 : 600 }}>
                           {line.matched ? line.cylinder_label : "No match"}
                         </td>
-                        <td style={{ padding: "6px 8px" }}>{line.matched ? line.qty : "—"}</td>
+                        <td style={{ padding: "6px 8px" }}>
+                          {line.matched ? (
+                            <>
+                              {line.delivered_qty > 0 && line.delivered_qty !== line.qty ? line.delivered_qty : line.qty}
+                              {line.delivered_qty > 0 && line.delivered_qty !== line.qty && (
+                                <span style={{ marginLeft: 6, fontSize: 10, color: C.muted }}>(ordered: {line.qty})</span>
+                              )}
+                            </>
+                          ) : "—"}
+                        </td>
                         <td style={{ padding: "6px 8px" }}>{line.matched ? fmtCurrency(line.unit_price) : "—"}</td>
                         <td style={{ padding: "6px 8px", fontWeight: 600 }}>{line.matched ? fmtCurrency(line.line_total) : "—"}</td>
                       </tr>
                     ))}
-                    <tr style={{ background: C.panel }}>
-                      <td colSpan={4} style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>Subtotal</td>
-                      <td style={{ padding: "6px 8px", fontWeight: 600 }}>{fmtCurrency(form.total_price)}</td>
-                    </tr>
-                    <tr style={{ background: C.panel }}>
-                      <td colSpan={4} style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600, color: C.muted }}>GST (10%)</td>
-                      <td style={{ padding: "6px 8px", fontWeight: 600, color: C.muted }}>{fmtCurrency(Math.round(form.total_price * 0.10 * 100) / 100)}</td>
-                    </tr>
-                    <tr style={{ background: C.panel }}>
-                      <td colSpan={4} style={{ padding: "8px", textAlign: "right", fontWeight: 800 }}>TOTAL (incl. GST)</td>
-                      <td style={{ padding: "8px", fontWeight: 800, color: C.green, fontSize: 16 }}>{fmtCurrency(Math.round(form.total_price * 1.10 * 100) / 100)}</td>
-                    </tr>
+                    {(() => {
+                      const effectiveSubtotal = Math.round(priceLines.filter(l => l.matched).reduce((s, l) => s + (l.line_total || 0), 0) * 100) / 100;
+                      return formCustomerIsCommercial ? (<>
+                        <tr style={{ background: C.panel }}>
+                          <td colSpan={4} style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>Subtotal (excl. GST)</td>
+                          <td style={{ padding: "6px 8px", fontWeight: 600 }}>{fmtCurrency(effectiveSubtotal)}</td>
+                        </tr>
+                        <tr style={{ background: C.panel }}>
+                          <td colSpan={4} style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600, color: C.muted }}>GST (10%)</td>
+                          <td style={{ padding: "6px 8px", fontWeight: 600, color: C.muted }}>{fmtCurrency(Math.round(effectiveSubtotal * 0.10 * 100) / 100)}</td>
+                        </tr>
+                        <tr style={{ background: C.panel }}>
+                          <td colSpan={4} style={{ padding: "8px", textAlign: "right", fontWeight: 800 }}>TOTAL (incl. GST)</td>
+                          <td style={{ padding: "8px", fontWeight: 800, fontSize: 16 }}>{fmtCurrency(Math.round(effectiveSubtotal * 1.10 * 100) / 100)}</td>
+                        </tr>
+                      </>) : (<>
+                        <tr style={{ background: C.panel }}>
+                          <td colSpan={4} style={{ padding: "8px", textAlign: "right", fontWeight: 800 }}>TOTAL (incl. GST)</td>
+                          <td style={{ padding: "8px", fontWeight: 800, fontSize: 16 }}>{fmtCurrency(Math.round(effectiveSubtotal * 1.10 * 100) / 100)}</td>
+                        </tr>
+                        <tr style={{ background: C.panel }}>
+                          <td colSpan={4} style={{ padding: "4px 8px", textAlign: "right", color: C.muted, fontSize: 11 }}>Includes GST of</td>
+                          <td style={{ padding: "4px 8px", color: C.muted, fontSize: 11 }}>{fmtCurrency(Math.round(effectiveSubtotal * 0.10 * 100) / 100)}</td>
+                        </tr>
+                      </>);
+                    })()}
                   </tbody>
                 </table>
 
@@ -4568,7 +4850,12 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                                 </span>
                               )}
                             </div>
-                            <span style={{ fontSize: 12, color: C.muted }}>Qty {ln.qty}</span>
+                            <span style={{ fontSize: 12, color: C.muted }}>
+                              Qty {ln.delivered_qty > 0 && ln.delivered_qty !== ln.qty ? ln.delivered_qty : ln.qty}
+                              {ln.delivered_qty > 0 && ln.delivered_qty !== ln.qty && (
+                                <span style={{ marginLeft: 4, fontSize: 10, color: C.muted }}>(ordered: {ln.qty})</span>
+                              )}
+                            </span>
                             <span style={{ fontSize: 12, color: C.muted }}>@</span>
                             <input
                               type="number"
@@ -4580,7 +4867,7 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                               style={{ ...inputStyle, width: 100, padding: "4px 8px", fontSize: 12 }}
                             />
                             <span style={{ fontSize: 12, color: C.muted }}>=</span>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: C.green, minWidth: 80 }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, minWidth: 80 }}>
                               {fmtCurrency(ln.line_total)}
                             </span>
                             {Math.abs((ln.unit_price || 0) - (ln.original_price || 0)) > 0.001 && (
@@ -4645,15 +4932,6 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
               <label style={labelStyle}>Payment Reference</label>
               <input value={form.payment_ref} onChange={e => setForm(p => ({ ...p, payment_ref: e.target.value }))} style={inputStyle} placeholder="Auto-filled from customer" />
             </div>
-            {form.customer_id && (() => {
-              const cust = customers.find(c => c.id === form.customer_id);
-              return cust?.cc_masked ? (
-                <div>
-                  <label style={labelStyle}>CC on File</label>
-                  <CCReveal customerId={form.customer_id} masked={cust.cc_masked} />
-                </div>
-              ) : null;
-            })()}
             <div style={{ gridColumn: "1/-1" }}>
               <label style={labelStyle}>Notes</label>
               <input value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} style={inputStyle} placeholder="Delivery instructions, special requests..." />
@@ -4663,6 +4941,11 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
             <div>
               <label style={labelStyle}>PO Number</label>
               <input value={form.po_number} onChange={e => setForm(p => ({ ...p, po_number: e.target.value }))} style={inputStyle} placeholder="Customer PO reference" />
+            </div>
+            <div>
+              <label style={labelStyle}>Scheduled Delivery Date</label>
+              <input type="date" value={form.scheduled_date || ""} onChange={e => setForm(p => ({ ...p, scheduled_date: e.target.value }))} style={inputStyle} />
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>Auto-updated by OptimoRoute if delivery is rescheduled.</div>
             </div>
             <div>
               <label style={labelStyle}>Duration (minutes)</label>
@@ -4753,13 +5036,37 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
       )}
 
       {/* ORDER LIST */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        {[
+          { id: "open",        label: "Open" },
+          { id: "dispatching", label: "Open + Dispatching" },
+          { id: "invoiced",    label: "Invoiced" },
+          { id: "all",         label: "All Orders" },
+        ].map(v => {
+          const active = orderViewFilter === v.id;
+          return (
+            <button
+              key={v.id}
+              onClick={() => setOrderViewFilter(v.id)}
+              style={{
+                padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none",
+                background: active ? C.accent : C.input, color: active ? "#fff" : C.muted,
+                transition: "background 0.15s",
+              }}
+            >
+              {v.label}
+            </button>
+          );
+        })}
+        <span style={{ fontSize: 11, color: C.muted, marginLeft: 4 }}>{filteredOrders.length} order{filteredOrders.length !== 1 ? "s" : ""}</span>
+      </div>
       <input placeholder="Search by customer, address, contact, phone, PO#, order#..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, marginBottom: 16, maxWidth: 480 }} />
 
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {["Order #", "Date", "Customer", "PO#", "Order", "Total $", "Paid", "Invoice", "Due Date", "Status", "Actions"].map(h => (
+              {["Order #", "Date", "Customer", "PO#", "Order", "Total $", "Paid", "Invoice", "Actions", "Due Date", "Status", "Optimo Status"].map(h => (
                 <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
@@ -4767,22 +5074,70 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
           <tbody>
             {filteredOrders.map(o => (
               <tr key={o.id} style={{ borderBottom: `1px solid ${C.border}`, background: editing === o.id ? "#f59e0b08" : "transparent", opacity: o.status === "cancelled" ? 0.5 : 1 }}>
-                <td style={{ padding: "6px 8px", color: C.accent, fontWeight: 600 }}>{o.order_number || "—"}</td>
-                <td style={{ padding: "6px 8px" }}>{o.order_date}</td>
+                <td style={{ padding: "6px 8px" }}>
+                  <button onClick={() => startEdit(o)} style={{ background: "none", border: "none", padding: 0, color: C.blue, fontWeight: 700, fontSize: 12, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2 }}>{o.order_number || "—"}</button>
+                </td>
+                <td style={{ padding: "6px 8px" }}>
+                  <div>{o.order_date}</div>
+                  {o.scheduled_date && o.scheduled_date !== o.order_date && (
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }} title="Scheduled delivery date from OptimoRoute">
+                      ↻ {o.scheduled_date}
+                    </div>
+                  )}
+                </td>
                 <td style={{ padding: "6px 8px", fontWeight: 600 }}>{o.customer_name || o.customer_name_lookup || o.address || "—"}</td>
                 <td style={{ padding: "6px 8px", color: C.muted }}>{o.po_number || "—"}</td>
                 <td style={{ padding: "6px 8px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.order_detail || "—"}</td>
-                <td style={{ padding: "6px 8px", fontWeight: 700, color: C.green }}>{o.total_price ? fmtCurrency(o.total_price) : "—"}</td>
+                <td style={{ padding: "6px 8px", fontWeight: 700 }}>{o.total_price ? fmtCurrency(o.total_price) : "—"}</td>
                 <td style={{ padding: "6px 8px" }}>
                   {o.paid ? <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#22c55e22", color: C.green }}>PAID</span> : <span style={{ color: C.muted }}>—</span>}
                 </td>
                 <td style={{ padding: "6px 8px" }}>
                   {o.invoice_id ? (
                     <button onClick={e => { e.stopPropagation(); setInvoiceViewId(o.invoice_id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}>
-                      <span style={{ color: C.accent, fontWeight: 700, fontSize: 12 }}>{o.invoice_number || "View"}</span>
-                      {o.invoice_status && <span style={{ marginLeft: 4, padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700, background: o.invoice_status === "paid" ? "#22c55e22" : o.invoice_status === "void" ? "#6b728022" : "#f59e0b22", color: o.invoice_status === "paid" ? C.green : o.invoice_status === "void" ? C.muted : C.accent }}>{o.invoice_status.toUpperCase()}</span>}
+                      <span style={{ color: C.blue, fontWeight: 700, fontSize: 12 }}>{o.invoice_number || "View"}</span>
+                      {o.invoice_status && <span style={{ marginLeft: 4, padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700, background: o.invoice_status === "paid" ? "#22c55e22" : "#6b728022", color: o.invoice_status === "paid" ? C.green : C.muted }}>{o.invoice_status.toUpperCase()}</span>}
                     </button>
                   ) : <span style={{ color: C.muted }}>—</span>}
+                </td>
+                <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+                  <button onClick={() => startEdit(o)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, marginRight: 6 }}>Edit</button>
+                  {o.invoice_id && !o.paid && (
+                    <button onClick={e => { e.stopPropagation(); setInvoiceViewId(o.invoice_id); }} style={{ background: "none", border: "none", color: C.green, cursor: "pointer", fontSize: 12, marginRight: 6, fontWeight: 600 }}>
+                      Pay
+                    </button>
+                  )}
+                  {!o.paid && (
+                    <button onClick={() => matchCreditToOrder(o.id)} title="Apply available customer credit to this order" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, marginRight: 6 }}>
+                      Match Credit
+                    </button>
+                  )}
+                  {(o.status === "open" || o.status === "awaiting_dispatch") && (
+                    <button onClick={() => confirmPayment(o.id)} style={{ ...btnStyle(C.blue), padding: "3px 8px", fontSize: 11, marginRight: 6 }}>
+                      {o.collection ? "Fulfil" : (o.status === "awaiting_dispatch" ? "Push to Optimo" : "Confirm & Push")}
+                    </button>
+                  )}
+                  {o.optimoroute_id && o.status === "dispatched" && o.or_completion_status !== "success" && (
+                    <button
+                      onClick={async () => {
+                        setOrSyncing(s => new Set([...s, o.id]));
+                        try {
+                          const r = await api.pullOptimoStatus(o.id);
+                          showToast(r.message || `OR status: ${r.status}`);
+                          if (r.status === "completed") loadOrders();
+                        } catch (e) { showToast(e.message, "error"); }
+                        finally { setOrSyncing(s => { const n = new Set(s); n.delete(o.id); return n; }); }
+                      }}
+                      disabled={orSyncing.has(o.id)}
+                      style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, marginRight: 6 }}
+                      title="Check OptimoRoute for completion"
+                    >
+                      {orSyncing.has(o.id) ? "…" : "↻ OR"}
+                    </button>
+                  )}
+                  {o.status !== "cancelled" && (
+                    <button onClick={() => cancelOrder(o.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>Cancel</button>
+                  )}
                 </td>
                 <td style={{ padding: "6px 8px", color: o.invoice_due_date ? C.text : C.muted }}>
                   {o.invoice_due_date || "—"}
@@ -4793,24 +5148,29 @@ function OrdersView({ customers, cylinderTypes, showToast, reloadCustomers, pend
                     return <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: ss.bg, color: ss.fg }}>{ss.label}</span>;
                   })()}
                   {o.collection ? <span style={{ padding: "2px 5px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: "#6b728022", color: C.muted, marginLeft: 4 }}>COLL</span> : null}
-                  {o.optimoroute_id && <span style={{ padding: "2px 5px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: "#8b5cf622", color: C.purple, marginLeft: 4 }}>OR</span>}
                 </td>
-                <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
-                  <button onClick={() => startEdit(o)} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 12, marginRight: 6 }}>Edit</button>
-                  {!o.paid && (
-                    <button onClick={() => matchCreditToOrder(o.id)} title="Apply available customer credit to this order" style={{ background: "none", border: "none", color: C.purple, cursor: "pointer", fontSize: 12, marginRight: 6, fontWeight: 600 }}>
-                      Match Credit
-                    </button>
-                  )}
-                  {/* Round 3: show Push/Fulfil button for orders in open or awaiting_dispatch only */}
-                  {(o.status === "open" || o.status === "awaiting_dispatch") && (
-                    <button onClick={() => confirmPayment(o.id)} style={{ ...btnStyle(C.green), padding: "3px 8px", fontSize: 11, marginRight: 6 }}>
-                      {o.collection ? "Fulfil" : (o.status === "awaiting_dispatch" ? "Push to Optimo" : "Confirm & Push")}
-                    </button>
-                  )}
-                  {o.status !== "cancelled" && (
-                    <button onClick={() => cancelOrder(o.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12 }}>Cancel</button>
-                  )}
+                <td style={{ padding: "6px 8px" }}>
+                  {o.optimoroute_id ? (() => {
+                    const ors = o.or_completion_status;
+                    if (!ors) return <span style={{ color: C.muted, fontSize: 11 }}>Dispatched</span>;
+                    const map = {
+                      success:  { label: "Completed",  color: C.text },
+                      failed:   { label: "Failed",     color: C.red },
+                      rejected: { label: "Rejected",   color: C.red },
+                    };
+                    const s = map[ors] || { label: ors, color: C.muted };
+                    return (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ color: s.color, fontWeight: 600, fontSize: 11 }}>{s.label}</span>
+                        <a
+                          href={`/api/orders/${o.id}/pod-view`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: 10, color: C.accent, fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 2 }}
+                        >POD</a>
+                      </div>
+                    );
+                  })() : <span style={{ color: C.muted, fontSize: 11 }}>—</span>}
                 </td>
               </tr>
             ))}
@@ -4960,7 +5320,7 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
   const isAdmin = userRole === "admin";
 
   // Bulk pricing tab
-  const [bulkMode, setBulkMode] = useState("fixed");
+  const [bulkMode, setBulkMode] = useState("increase");
   const [selCT, setSelCT] = useState("");
   const [bulkPrice, setBulkPrice] = useState("");
   const [pct, setPct] = useState("");
@@ -5038,7 +5398,7 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
       const data = { cylinder_type: selCT, customer_ids: selCustomers };
       if (bulkMode === "percentage") { data.mode = "percentage"; data.percentage = parseFloat(pct); }
       else if (bulkMode === "per_litre") { data.mode = "per_litre"; data.cents_per_litre = parseFloat(centsPerLitre); }
-      else { data.price = parseFloat(bulkPrice); }
+      else { data.mode = "increase"; data.amount = parseFloat(bulkPrice); }
       const r = await api.bulkPrice(data);
       pricing.reload();
       let msg = `${r.updated} customers updated`;
@@ -5083,7 +5443,7 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
       {tab === "bulk" && (
         <Card>
           <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-            <button onClick={() => setBulkMode("fixed")} style={btnStyle(bulkMode === "fixed" ? C.accent : C.muted)}>Set Fixed Price</button>
+            <button onClick={() => setBulkMode("increase")} style={btnStyle(bulkMode === "increase" ? C.accent : C.muted)}>Increase Price By</button>
             <button onClick={() => setBulkMode("percentage")} style={btnStyle(bulkMode === "percentage" ? C.accent : C.muted)}>% Increase</button>
             <button onClick={() => setBulkMode("per_litre")} style={btnStyle(bulkMode === "per_litre" ? C.accent : C.muted)}>Increase per ltr</button>
           </div>
@@ -5095,8 +5455,16 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
                 {(cylinderTypes || []).map(ct => <option key={ct.id} value={ct.id}>{ct.label} (default: {fmtCurrency(ct.default_price)}){ct.item_type === "sale" && ct.litres ? ` · ${ct.litres}L` : ""}</option>)}
               </select>
             </div>
-            {bulkMode === "fixed" ? (
-              <div><label style={labelStyle}>New Price ($)</label><input type="number" step="0.01" value={bulkPrice} onChange={e => setBulkPrice(e.target.value)} style={{ ...inputStyle, width: 120 }} /></div>
+            {bulkMode === "increase" ? (
+              <div>
+                <label style={labelStyle}>Increase By ($)</label>
+                <input type="number" step="0.01" value={bulkPrice} onChange={e => setBulkPrice(e.target.value)} style={{ ...inputStyle, width: 120 }} placeholder="e.g. 2.50" />
+                {bulkPrice && selCT && (
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                    Each customer's current price + {fmtCurrency(parseFloat(bulkPrice) || 0)}
+                  </div>
+                )}
+              </div>
             ) : bulkMode === "percentage" ? (
               <div><label style={labelStyle}>Increase %</label><input type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} style={{ ...inputStyle, width: 120 }} /></div>
             ) : (
@@ -5130,6 +5498,7 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
                   <th style={{ padding: "6px 10px", width: 30 }}></th>
                   <th style={{ padding: "6px 10px", textAlign: "left", color: C.muted, fontWeight: 600 }}>Customer</th>
                   {isAdmin && selCT && <th style={{ padding: "6px 10px", textAlign: "right", color: C.muted, fontWeight: 600 }}>Current Price</th>}
+                  {isAdmin && selCT && bulkMode === "increase" && bulkPrice && <th style={{ padding: "6px 10px", textAlign: "right", color: C.green, fontWeight: 600 }}>New Price</th>}
                   {isAdmin && selCT && <th style={{ padding: "6px 10px", textAlign: "center", color: C.muted, fontWeight: 600 }}>Fixed</th>}
                 </tr>
               </thead>
@@ -5150,6 +5519,11 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
                         <td style={{ padding: "4px 10px", textAlign: "right", fontWeight: 600, color: pd?.isCustom ? C.accent : C.muted }}>
                           {pd ? fmtCurrency(pd.price) : "—"}
                           {pd?.isCustom && <span style={{ fontSize: 9, marginLeft: 4, color: C.accent }}>●</span>}
+                        </td>
+                      )}
+                      {isAdmin && selCT && bulkMode === "increase" && bulkPrice && (
+                        <td style={{ padding: "4px 10px", textAlign: "right", fontWeight: 600, color: pd?.isFixed ? C.muted : C.green }}>
+                          {pd?.isFixed ? "—" : pd ? fmtCurrency(Math.round((pd.price + (parseFloat(bulkPrice) || 0)) * 100) / 100) : "—"}
                         </td>
                       )}
                       {isAdmin && selCT && (
@@ -5303,6 +5677,291 @@ function PricingView({ customers, cylinderTypes, showToast, userRole }) {
           )}
         </Card>
       )}
+
+    </div>
+  );
+}
+
+// ==================== REPORTS PANEL ====================
+function ReportsPanel({ showToast }) {
+  const today = new Date().toISOString().split("T")[0];
+  const ninetyAgo = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
+
+  const REPORTS = [
+    {
+      id: "avg_sell",
+      label: "Average Sell Price per Item",
+      desc: "Average, min, and max unit sale price per item over the selected period.",
+      params: [
+        { id: "from", label: "From Date", type: "date", default: ninetyAgo },
+        { id: "to",   label: "To Date",   type: "date", default: today },
+      ],
+      endpoint: "avg-sell",
+      columns: [
+        { key: "item",       label: "Item" },
+        { key: "orders",     label: "Orders" },
+        { key: "total_qty",  label: "Total Qty" },
+        { key: "avg_price",  label: "Avg Price",  fmt: "currency" },
+        { key: "min_price",  label: "Min Price",  fmt: "currency" },
+        { key: "max_price",  label: "Max Price",  fmt: "currency" },
+      ],
+    },
+    {
+      id: "avg_rent",
+      label: "Average Rent Price per Item",
+      desc: "Average, min, and max rental cylinder unit price per item over the selected period.",
+      params: [
+        { id: "from", label: "From Date", type: "date", default: ninetyAgo },
+        { id: "to",   label: "To Date",   type: "date", default: today },
+      ],
+      endpoint: "avg-rent",
+      columns: [
+        { key: "item",       label: "Item" },
+        { key: "orders",     label: "Orders" },
+        { key: "total_qty",  label: "Total Qty" },
+        { key: "avg_price",  label: "Avg Price",  fmt: "currency" },
+        { key: "min_price",  label: "Min Price",  fmt: "currency" },
+        { key: "max_price",  label: "Max Price",  fmt: "currency" },
+      ],
+    },
+    {
+      id: "bulk_lpg",
+      label: "Bulk LPG Delivery Alerts",
+      desc: "Deliveries where total litres delivered meets or exceeds the threshold.",
+      params: [
+        { id: "from",       label: "From Date",       type: "date",   default: ninetyAgo },
+        { id: "to",         label: "To Date",         type: "date",   default: today },
+        { id: "min_litres", label: "Min Litres",      type: "number", default: "0",  placeholder: "e.g. 500" },
+      ],
+      endpoint: "bulk-lpg-alerts",
+      columns: [
+        { key: "date",          label: "Date" },
+        { key: "customer",      label: "Customer" },
+        { key: "account_number",label: "Account #" },
+        { key: "item",          label: "Item" },
+        { key: "litres_per_unit", label: "L/Unit" },
+        { key: "qty",           label: "Qty" },
+        { key: "total_litres",  label: "Total Litres" },
+        { key: "notes",         label: "Notes" },
+      ],
+    },
+    {
+      id: "price_drop",
+      label: "Customer Price Drop Alerts",
+      desc: "Customers whose current price is more than X% below their historical average for that item.",
+      params: [
+        { id: "min_pct", label: "Drop % Threshold", type: "number", default: "5", placeholder: "e.g. 5" },
+      ],
+      endpoint: "price-drop-alerts",
+      columns: [
+        { key: "customer",              label: "Customer" },
+        { key: "account_number",        label: "Account #" },
+        { key: "item",                  label: "Item" },
+        { key: "current_price",         label: "Current Price",   fmt: "currency" },
+        { key: "avg_historical_price",  label: "Avg Historical",  fmt: "currency" },
+        { key: "pct_change",            label: "% Change",        fmt: "pct" },
+      ],
+    },
+    {
+      id: "rental_expiry",
+      label: "Rental Expiry Dates Due",
+      desc: "Customers with a prepaid rental cycle expiring within X days.",
+      params: [
+        { id: "days", label: "Days Ahead", type: "number", default: "30", placeholder: "e.g. 30" },
+      ],
+      endpoint: "rental-expiry",
+      columns: [
+        { key: "customer",       label: "Customer" },
+        { key: "account_number", label: "Account #" },
+        { key: "phone",          label: "Phone" },
+        { key: "item",           label: "Item" },
+        { key: "expiry_date",    label: "Expiry Date" },
+        { key: "days_left",      label: "Days Left" },
+      ],
+    },
+    {
+      id: "fixed_price_expiry",
+      label: "Fixed Price Contracts Ending",
+      desc: "Customers with a fixed price contract ending within X days.",
+      params: [
+        { id: "days", label: "Days Ahead", type: "number", default: "30", placeholder: "e.g. 30" },
+      ],
+      endpoint: "fixed-price-expiry",
+      columns: [
+        { key: "customer",       label: "Customer" },
+        { key: "account_number", label: "Account #" },
+        { key: "item",           label: "Item" },
+        { key: "price",          label: "Fixed Price", fmt: "currency" },
+        { key: "fixed_from",     label: "From" },
+        { key: "fixed_to",       label: "To" },
+        { key: "days_left",      label: "Days Left" },
+      ],
+    },
+    {
+      id: "overdue",
+      label: "Overdue Customers",
+      desc: "Open invoices with a due date in the selected range that are past due.",
+      params: [
+        { id: "from", label: "Due Date From", type: "date", default: ninetyAgo },
+        { id: "to",   label: "Due Date To",   type: "date", default: today },
+      ],
+      endpoint: "overdue",
+      columns: [
+        { key: "customer",       label: "Customer" },
+        { key: "account_number", label: "Account #" },
+        { key: "phone",          label: "Phone" },
+        { key: "invoice_number", label: "Invoice #" },
+        { key: "invoice_date",   label: "Invoice Date" },
+        { key: "due_date",       label: "Due Date" },
+        { key: "total",          label: "Total",        fmt: "currency" },
+        { key: "outstanding",    label: "Outstanding",  fmt: "currency" },
+        { key: "days_overdue",   label: "Days Overdue" },
+      ],
+    },
+  ];
+
+  const initParams = (report) => Object.fromEntries((report?.params || []).map(p => [p.id, p.default ?? ""]));
+
+  const [selectedId, setSelectedId] = useState(REPORTS[0].id);
+  const [params, setParams] = useState(() => initParams(REPORTS[0]));
+  const [results, setResults] = useState(null);
+  const [running, setRunning] = useState(false);
+
+  const selected = REPORTS.find(r => r.id === selectedId);
+
+  const selectReport = (r) => {
+    setSelectedId(r.id);
+    setParams(initParams(r));
+    setResults(null);
+  };
+
+  const runReport = async () => {
+    if (!selected) return;
+    setRunning(true);
+    setResults(null);
+    try {
+      const data = await api.runReport(selected.endpoint, params);
+      setResults(data);
+      if (!data.length) showToast("Report ran — no matching records found", "info");
+    } catch (e) {
+      showToast(e.message, "error");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const exportCsv = () => {
+    if (!results?.length || !selected) return;
+    const headers = selected.columns.map(c => c.label).join(",");
+    const rows = results.map(r =>
+      selected.columns.map(c => {
+        const v = r[c.key] ?? "";
+        return String(v).includes(",") || String(v).includes('"') ? `"${String(v).replace(/"/g, '""')}"` : v;
+      }).join(",")
+    );
+    const csv = [headers, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${selected.label.replace(/[^a-z0-9]/gi, "_")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const fmtCell = (value, fmt) => {
+    if (value == null || value === "") return "—";
+    if (fmt === "currency") return fmtCurrency(value);
+    if (fmt === "pct") return `${value}%`;
+    return value;
+  };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 16, alignItems: "start" }}>
+      {/* Left: report list */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {REPORTS.map(r => {
+          const active = r.id === selectedId;
+          return (
+            <button key={r.id} onClick={() => selectReport(r)} style={{
+              textAlign: "left", padding: "10px 14px", borderRadius: 8, border: "none",
+              background: active ? C.accent + "22" : C.panel,
+              borderLeft: `3px solid ${active ? C.accent : "transparent"}`,
+              cursor: "pointer", color: active ? C.accent : C.text,
+              fontWeight: active ? 700 : 400, fontSize: 13, lineHeight: 1.4,
+            }}>
+              {r.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Right: report form + results */}
+      <div>
+        {selected && (
+          <Card>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>{selected.label}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>{selected.desc}</div>
+
+            {/* Parameter inputs */}
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16, alignItems: "flex-end" }}>
+              {selected.params.map(p => (
+                <div key={p.id}>
+                  <label style={labelStyle}>{p.label}</label>
+                  <input
+                    type={p.type || "text"}
+                    value={params[p.id] ?? ""}
+                    placeholder={p.placeholder || ""}
+                    onChange={e => setParams(prev => ({ ...prev, [p.id]: e.target.value }))}
+                    style={{ ...inputStyle, width: p.type === "date" ? 160 : 120, padding: "6px 10px" }}
+                  />
+                </div>
+              ))}
+              <button onClick={runReport} disabled={running} style={{ ...btnStyle(C.accent), padding: "7px 20px", fontWeight: 700, opacity: running ? 0.7 : 1 }}>
+                {running ? "Running…" : "Run Report"}
+              </button>
+              {results?.length > 0 && (
+                <button onClick={exportCsv} style={{ ...btnStyle(C.green), padding: "7px 16px", fontWeight: 600 }}>
+                  Export CSV
+                </button>
+              )}
+            </div>
+
+            {/* Results table */}
+            {results !== null && (
+              results.length === 0 ? (
+                <div style={{ color: C.muted, fontSize: 13, padding: "16px 0" }}>No records match the selected criteria.</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{results.length} row{results.length !== 1 ? "s" : ""}</div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", minWidth: 500 }}>
+                      <thead>
+                        <tr style={{ borderBottom: `2px solid ${C.border}`, background: C.panel }}>
+                          {selected.columns.map(c => (
+                            <th key={c.key} style={{ textAlign: "left", padding: "7px 10px", color: C.muted, fontWeight: 600, whiteSpace: "nowrap" }}>{c.label}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {results.map((row, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? "transparent" : C.panel + "80" }}>
+                            {selected.columns.map(c => (
+                              <td key={c.key} style={{ padding: "6px 10px", color: c.fmt === "pct" && row[c.key] < 0 ? C.red : C.text }}>
+                                {fmtCell(row[c.key], c.fmt)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )
+            )}
+          </Card>
+        )}
+      </div>
     </div>
   );
 }
@@ -5551,6 +6210,14 @@ function AdministratorView({ showToast }) {
   const [importResult, setImportResult] = useState(null);
   const fileInputRef = useRef(null);
 
+  // Cylinder type import state
+  const [ctImportFileName, setCtImportFileName] = useState("");
+  const [ctImportHeaders, setCtImportHeaders] = useState([]);
+  const [ctImportRows, setCtImportRows] = useState([]);
+  const [ctImportBusy, setCtImportBusy] = useState(false);
+  const [ctImportResult, setCtImportResult] = useState(null);
+  const ctFileInputRef = useRef(null);
+
   // Recognized customer field aliases (used to flag unmatched headers)
   const KNOWN_CUSTOMER_HEADERS = new Set([
     "address", "delivery_address", "delivery address",
@@ -5677,6 +6344,81 @@ function AdministratorView({ showToast }) {
       showToast(e.message, "error");
     } finally {
       setImportBusy(false);
+    }
+  };
+
+  // ── Cylinder Type import handlers ──
+  const CT_KNOWN_HEADERS = new Set([
+    "label", "default_price", "price_exc_gst", "price exc gst", "price",
+    "price_inc_gst", "price inc gst",
+    "gas_group", "gas group",
+    "item_type", "item type", "type",
+    "sort_order", "sort order",
+    "litres",
+  ]);
+
+  const handleCtFile = (file) => {
+    if (!file) return;
+    setCtImportFileName(file.name);
+    setCtImportResult(null);
+    const isXlsx = /\.xlsx?$/i.test(file.name);
+    const reader = new FileReader();
+    const applyAoa = (aoa) => {
+      if (!aoa.length) { setCtImportHeaders([]); setCtImportRows([]); return; }
+      const headers = aoa[0].map(h => String(h || "").trim());
+      const rows = [];
+      for (let r = 1; r < aoa.length; r++) {
+        const rec = aoa[r];
+        if (!rec || rec.every(c => String(c || "").trim() === "")) continue;
+        const obj = {};
+        for (let c = 0; c < headers.length; c++) {
+          const key = headers[c].toLowerCase();
+          if (!key) continue;
+          obj[key] = (rec[c] !== undefined && rec[c] !== null ? String(rec[c]) : "").trim();
+        }
+        rows.push(obj);
+      }
+      setCtImportHeaders(headers);
+      setCtImportRows(rows);
+    };
+    if (isXlsx) {
+      reader.onload = () => {
+        try {
+          if (!window.XLSX) { showToast("Spreadsheet library not loaded — refresh the page and try again", "error"); return; }
+          const wb = window.XLSX.read(new Uint8Array(reader.result), { type: "array" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          applyAoa(window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", blankrows: false, raw: false }));
+        } catch (err) { showToast("Failed to parse spreadsheet: " + err.message, "error"); }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.onload = () => {
+        try { const { headers, rows } = parseCSV(String(reader.result || "")); setCtImportHeaders(headers); setCtImportRows(rows); }
+        catch (err) { showToast("Failed to parse CSV: " + err.message, "error"); }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const onCtFileChange = (e) => handleCtFile(e.target.files?.[0]);
+
+  const clearCtImport = () => {
+    setCtImportFileName(""); setCtImportHeaders([]); setCtImportRows([]); setCtImportResult(null);
+    if (ctFileInputRef.current) ctFileInputRef.current.value = "";
+  };
+
+  const runCtImport = async () => {
+    if (ctImportRows.length === 0) return;
+    if (!confirm(`Import ${ctImportRows.length} cylinder type row(s)? Existing types (matched by label) will be updated in place.`)) return;
+    setCtImportBusy(true);
+    try {
+      const r = await api.importCylinderTypes(ctImportRows);
+      setCtImportResult(r);
+      showToast(`Import complete: ${r.created} created, ${r.updated} updated, ${r.skipped} skipped`);
+    } catch (e) {
+      showToast(e.message, "error");
+    } finally {
+      setCtImportBusy(false);
     }
   };
 
@@ -6091,6 +6833,121 @@ function AdministratorView({ showToast }) {
         </Card>
       </div>
 
+      {/* Import Cylinder Types */}
+      <div style={{ marginTop: 24 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Import Cylinder Types</h3>
+        <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
+          Upload a CSV or spreadsheet. The first row must be a header row. <strong style={{ color: C.text }}>label</strong> is required.
+          Existing types are matched by label (case-insensitive) and updated in place. New labels create a new type.
+          Accepted price columns: <code>price_exc_gst</code> / <code>default_price</code> (stored as-is) or <code>price_inc_gst</code> (divided by 1.1 before storing).
+        </div>
+        <Card>
+          <div style={{ marginBottom: 10, fontSize: 12, color: C.muted }}>
+            CSV columns: <code>label</code>, <code>price_exc_gst</code>, <code>price_inc_gst</code>, <code>gas_group</code>, <code>item_type</code> (cylinder|sale), <code>sort_order</code>, <code>litres</code>
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <input ref={ctFileInputRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={onCtFileChange} style={{ fontSize: 12, color: C.text }} />
+            {ctImportFileName && (
+              <button onClick={clearCtImport} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>Clear</button>
+            )}
+          </div>
+
+          {ctImportRows.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
+                <strong style={{ color: C.text }}>{ctImportFileName}</strong> · {ctImportRows.length} row{ctImportRows.length === 1 ? "" : "s"} · {ctImportHeaders.length} column{ctImportHeaders.length === 1 ? "" : "s"}
+              </div>
+
+              {/* Header badges */}
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                {ctImportHeaders.map(h => {
+                  const lc = h.toLowerCase();
+                  const recognized = CT_KNOWN_HEADERS.has(lc);
+                  return (
+                    <span key={h} style={{
+                      padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+                      background: recognized ? "#22c55e22" : "#f59e0b22",
+                      color: recognized ? C.green : C.accent,
+                      border: `1px solid ${recognized ? C.green : C.accent}`,
+                    }} title={recognized ? "Recognized" : "Unknown — will be ignored"}>
+                      {recognized ? h : `${h} ⚠`}
+                    </span>
+                  );
+                })}
+              </div>
+
+              {/* Require label column */}
+              {!ctImportHeaders.some(h => h.toLowerCase() === "label") && (
+                <div style={{ padding: "8px 12px", background: "#ef444422", border: `1px solid ${C.red}`, borderRadius: 6, color: C.red, fontSize: 12, marginBottom: 12 }}>
+                  ⚠ No "label" column found. This column is required.
+                </div>
+              )}
+
+              {/* Preview */}
+              <div style={{ marginBottom: 12, fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Preview (first 5 rows)</div>
+              <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 6 }}>
+                <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: C.panel, borderBottom: `1px solid ${C.border}` }}>
+                      {ctImportHeaders.map(h => (
+                        <th key={h} style={{ textAlign: "left", padding: "4px 8px", color: C.muted, fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ctImportRows.slice(0, 5).map((row, i) => (
+                      <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        {ctImportHeaders.map(h => (
+                          <td key={h} style={{ padding: "4px 8px", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {row[h.toLowerCase()] || <span style={{ color: C.muted }}>—</span>}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <button
+                onClick={runCtImport}
+                disabled={ctImportBusy || !ctImportHeaders.some(h => h.toLowerCase() === "label")}
+                style={{ ...btnStyle(C.green), marginTop: 12, opacity: ctImportBusy ? 0.6 : 1 }}
+              >
+                {ctImportBusy ? "Importing..." : `Import ${ctImportRows.length} Row${ctImportRows.length === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          )}
+
+          {ctImportResult && (
+            <div style={{ marginTop: 16, padding: "10px 12px", background: C.input, borderRadius: 6, fontSize: 12 }}>
+              <div style={{ marginBottom: 6 }}>
+                <strong style={{ color: C.green }}>{ctImportResult.created}</strong> created ·{" "}
+                <strong style={{ color: C.blue }}>{ctImportResult.updated}</strong> updated ·{" "}
+                <strong style={{ color: ctImportResult.skipped > 0 ? C.red : C.muted }}>{ctImportResult.skipped}</strong> skipped
+                {" "}<span style={{ color: C.muted }}>(of {ctImportResult.total} total)</span>
+              </div>
+              {ctImportResult.errors?.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 11, color: C.red, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Errors ({ctImportResult.errors.length})</div>
+                  <div style={{ maxHeight: 200, overflowY: "auto", background: C.card, borderRadius: 4, padding: 8 }}>
+                    {ctImportResult.errors.slice(0, 50).map((e, i) => (
+                      <div key={i} style={{ fontSize: 11, color: C.muted, padding: "2px 0" }}>
+                        Row {e.row}: {e.label ? <strong style={{ color: C.text }}>{e.label}</strong> : <em>(no label)</em>} — {e.reason}
+                      </div>
+                    ))}
+                    {ctImportResult.errors.length > 50 && (
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 4, fontStyle: "italic" }}>
+                        ... and {ctImportResult.errors.length - 50} more
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+
       {/* Backup & Restore — added for step 4 compliance work */}
       <BackupRestore showToast={showToast} />
 
@@ -6267,6 +7124,601 @@ function UsersView({ showToast }) {
   );
 }
 
+// ==================== EASY ORDER VIEW ====================
+const eoThStyle = {
+  padding: "8px 6px", fontSize: 11, fontWeight: 700, textTransform: "uppercase",
+  letterSpacing: "0.04em", color: "#6b7280", borderBottom: "1px solid #23262f",
+  whiteSpace: "nowrap",
+};
+
+// Groups flat cylinder-type items into paired rows: each sale item is merged with
+// its linked rental cylinder so both appear on one line. Unlinked types appear solo.
+function buildGroupedItems(items) {
+  const used = new Set();
+  const out = [];
+  for (const item of (items || [])) {
+    if (item.item_type === "sale") {
+      const linked = (items || []).find(i => i.item_type === "cylinder" && i.linked_sale_item_id === item.cylinder_type_id);
+      if (linked) used.add(linked.cylinder_type_id);
+      out.push({
+        key: item.cylinder_type_id,
+        label: item.label,
+        sale_type_id: item.cylinder_type_id,
+        cylinder_type_id: linked ? linked.cylinder_type_id : null,
+        on_hand: linked ? linked.on_hand : item.on_hand,
+        fill_price: item.price,
+        fill_is_fixed: item.is_fixed,
+        rent_price: linked ? linked.price : null,
+        rent_is_fixed: linked ? linked.is_fixed : false,
+      });
+    }
+  }
+  // Standalone rental cylinders not paired with any sale item
+  for (const item of (items || [])) {
+    if (item.item_type === "cylinder" && !used.has(item.cylinder_type_id)) {
+      out.push({
+        key: item.cylinder_type_id,
+        label: item.label,
+        sale_type_id: null,
+        cylinder_type_id: item.cylinder_type_id,
+        on_hand: item.on_hand,
+        fill_price: null,
+        fill_is_fixed: false,
+        rent_price: item.price,
+        rent_is_fixed: item.is_fixed,
+      });
+    }
+  }
+  return out;
+}
+
+function EasyOrderView({ customers, showToast, reloadCustomers, pendingCustomerId, onPendingCustomerHandled }) {
+  const [search, setSearch] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [prepData, setPrepData] = useState(null);
+  const [prepLoading, setPrepLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [rows, setRows] = useState({});
+  const [poNumber, setPoNumber] = useState("");
+  const [notes, setNotes] = useState("");
+  const [scheduleDate, setScheduleDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const [extraRows, setExtraRows] = useState([]); // manually added lines: { uid, cylinder_type_id, label, price, order_qty, return_qty, return_other_qty }
+  const [addItemSelect, setAddItemSelect] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const searchRef = useRef(null);
+
+  // Focus search on mount
+  useEffect(() => { if (searchRef.current) searchRef.current.focus(); }, []);
+
+  // Pre-select a customer when navigated from CustomersView
+  useEffect(() => {
+    if (!pendingCustomerId) return;
+    const c = (customers || []).find(x => x.id === pendingCustomerId);
+    if (c) openCustomer(c);
+    if (onPendingCustomerHandled) onPendingCustomerHandled();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingCustomerId]);
+
+  const filteredCustomers = useMemo(() => {
+    const s = search.toLowerCase().trim();
+    const sNoSpaces = s.replace(/\s/g, "");
+    const all = (customers || []).filter(c => !c.archived);
+    if (!s) return all.slice(0, 60);
+    return all.filter(c => {
+      const phoneNorm = (c.phone || "").replace(/\s/g, "").toLowerCase();
+      return (
+        (c.name || "").toLowerCase().includes(s) ||
+        (c.contact || "").toLowerCase().includes(s) ||
+        (c.address || "").toLowerCase().includes(s) ||
+        (c.phone || "").toLowerCase().includes(s) ||
+        (sNoSpaces && phoneNorm.includes(sNoSpaces))
+      );
+    });
+  }, [customers, search]);
+
+  const openCustomer = async (c) => {
+    setSelectedCustomer(c);
+    setPrepData(null);
+    setPrepLoading(true);
+    try {
+      const data = await api.easyOrderPrep(c.id);
+      setPrepData(data);
+      const initial = {};
+      for (const g of buildGroupedItems(data.items)) {
+        initial[g.key] = { order_qty: "", return_qty: "", return_other_qty: "" };
+      }
+      setRows(initial);
+      setPoNumber("");
+      setNotes("");
+      setScheduleDate(new Date().toISOString().split("T")[0]);
+      setPaymentAmount("");
+      setPaymentMethod("Cash");
+      setExtraRows([]);
+      setAddItemSelect("");
+    } catch (e) {
+      showToast(e.message, "error");
+      setSelectedCustomer(null);
+    } finally {
+      setPrepLoading(false);
+    }
+  };
+
+  const closeModal = () => {
+    setSelectedCustomer(null);
+    setPrepData(null);
+    setRows({});
+    setExtraRows([]);
+    setAddItemSelect("");
+    setSubmitError("");
+  };
+
+  const updateRow = (typeId, field, val) => {
+    setRows(r => ({ ...r, [typeId]: { ...r[typeId], [field]: val } }));
+  };
+
+  const isCOD = (prepData?.customer?.payment_terms || "").toLowerCase() === "cod";
+  const eoIsCommercial = (prepData?.customer?.customer_category || "").toLowerCase() === "commercial";
+
+  // Merge sale items with their linked rental cylinders into single rows
+  const groupedItems = useMemo(() => buildGroupedItems(prepData?.items), [prepData]);
+
+  const submitOrder = async () => {
+    if (!prepData) return;
+    const today = scheduleDate || new Date().toISOString().split("T")[0];
+
+    const grouped = buildGroupedItems(prepData.items);
+
+    // Collect order lines (Order qty > 0) — grouped main rows
+    const orderLines = [];
+    for (const g of grouped) {
+      const row = rows[g.key] || {};
+      const qty = parseFloat(row.order_qty) || 0;
+      if (qty > 0) {
+        const typeId = g.sale_type_id || g.cylinder_type_id;
+        const price = g.fill_price ?? g.rent_price ?? 0;
+        orderLines.push({ cylinder_type_id: typeId, cylinder_label: g.label, qty, unit_price: price, line_total: Math.round(qty * price * 100) / 100 });
+      }
+    }
+    // Extra manually-added rows
+    for (const er of extraRows) {
+      const qty = parseFloat(er.order_qty) || 0;
+      const price = parseFloat(er.price) || 0;
+      if (qty > 0 && er.cylinder_type_id) {
+        orderLines.push({ cylinder_type_id: er.cylinder_type_id, cylinder_label: er.label, qty, unit_price: price, line_total: Math.round(qty * price * 100) / 100 });
+      }
+    }
+
+    // Collect return lines — grouped main rows (returns always use the cylinder_type_id)
+    const returnItems = [];
+    const returnOtherItems = [];
+    for (const g of grouped) {
+      const row = rows[g.key] || {};
+      const retQty = parseFloat(row.return_qty) || 0;
+      const retOtherQty = parseFloat(row.return_other_qty) || 0;
+      const cid = g.cylinder_type_id;
+      if (retQty > 0 && cid) returnItems.push({ cylinder_type_id: cid, qty: retQty });
+      if (retOtherQty > 0 && cid) returnOtherItems.push({ cylinder_type_id: cid, qty: retOtherQty });
+    }
+    // Extra rows returns (only for cylinder types)
+    for (const er of extraRows) {
+      const retQty = parseFloat(er.return_qty) || 0;
+      const retOtherQty = parseFloat(er.return_other_qty) || 0;
+      if (er.item_type === "cylinder") {
+        if (retQty > 0) returnItems.push({ cylinder_type_id: er.cylinder_type_id, qty: retQty });
+        if (retOtherQty > 0) returnOtherItems.push({ cylinder_type_id: er.cylinder_type_id, qty: retOtherQty });
+      }
+    }
+
+    const hasOrderLines = orderLines.length > 0;
+    const hasReturns = returnItems.length > 0 || returnOtherItems.length > 0;
+
+    if (!hasOrderLines && !hasReturns) {
+      setSubmitError("Enter at least one quantity to continue.");
+      return;
+    }
+
+    setSubmitError("");
+    const pmtAmt = parseFloat(paymentAmount) || 0;
+
+    setSubmitting(true);
+    try {
+      if (hasOrderLines) {
+        const orderPayload = {
+          customer_id: prepData.customer.id,
+          customer_name: formatCustomerDisplay(prepData.customer),
+          address: prepData.customer.address || "",
+          order_date: today,
+          po_number: poNumber,
+          notes,
+          lines: orderLines,
+          order_detail: orderLines.map(l => `${l.qty}x${l.cylinder_label}`).join(", "),
+          paid: pmtAmt > 0,
+          payment_amount: pmtAmt,
+          payment: pmtAmt > 0 ? paymentMethod : "",
+        };
+        const result = await api.createOrder(orderPayload);
+        if (result?.push_attempted && !result.push_success) {
+          showToast(`Order created — Optimo push failed: ${result.push_error || "unknown"}`, "error");
+        } else if (result?.push_attempted && result.push_success) {
+          showToast("Order created & dispatched to OptimoRoute");
+        } else {
+          showToast("Order created");
+        }
+      }
+
+      for (const r of returnItems) {
+        await api.createTransaction({
+          customer_id: prepData.customer.id,
+          cylinder_type: r.cylinder_type_id,
+          type: "return",
+          qty: r.qty,
+          date: today,
+          notes: poNumber ? `PO: ${poNumber}` : "",
+          source: "easy_order",
+        });
+      }
+      for (const r of returnOtherItems) {
+        await api.createTransaction({
+          customer_id: prepData.customer.id,
+          cylinder_type: r.cylinder_type_id,
+          type: "return_other",
+          qty: r.qty,
+          date: today,
+          notes: poNumber ? `PO: ${poNumber}` : "",
+          source: "easy_order",
+        });
+      }
+
+      // Append note to customer's internal notes if provided
+      if (notes.trim()) {
+        await api.addCustomerNote(prepData.customer.id, notes.trim()).catch(() => {});
+      }
+
+      if (!hasOrderLines && hasReturns) showToast("Returns recorded");
+
+      reloadCustomers();
+      closeModal();
+    } catch (e) {
+      console.error("[EasyOrder] submit failed:", e);
+      setSubmitError(e.message || "Submission failed — check console for details.");
+      showToast(e.message, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Modal (customer selected) ─────────────────────────────────────────────
+  if (selectedCustomer) {
+    const cust = prepData?.customer || selectedCustomer;
+    return (
+      <div style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000,
+        display: "flex", alignItems: "flex-start", justifyContent: "center",
+        padding: "20px 12px", overflowY: "auto",
+      }}>
+        <div style={{
+          background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12,
+          width: "min(98vw, 1040px)", padding: 24,
+        }}>
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18, gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 2 }}>
+                {formatCustomerDisplay(selectedCustomer)}
+              </div>
+              {selectedCustomer.address && (
+                <div style={{ fontSize: 13, color: C.muted }}>{selectedCustomer.address}</div>
+              )}
+              {selectedCustomer.phone && (
+                <div style={{ fontSize: 12, color: C.muted }}>{selectedCustomer.phone}</div>
+              )}
+              {isCOD && (
+                <span style={{
+                  display: "inline-block", marginTop: 8, padding: "3px 10px",
+                  background: "#ef444422", color: C.red, borderRadius: 4,
+                  fontSize: 11, fontWeight: 700, letterSpacing: "0.04em",
+                }}>
+                  COD — payment required before dispatch to Optimo
+                </span>
+              )}
+            </div>
+            <button onClick={closeModal} style={{ ...btnStyle(C.muted), padding: "6px 14px", flexShrink: 0 }}>
+              ✕ Close
+            </button>
+          </div>
+
+          {prepLoading && (
+            <div style={{ color: C.muted, textAlign: "center", padding: "40px 0" }}>Loading…</div>
+          )}
+
+          {prepData && (
+            <>
+              {/* Top row: PO # + Schedule Date */}
+              <div style={{ display: "flex", gap: 14, marginBottom: 16, flexWrap: "wrap" }}>
+                <div style={{ flex: "0 0 200px" }}>
+                  <label style={labelStyle}>PO Number</label>
+                  <input
+                    value={poNumber}
+                    onChange={e => setPoNumber(e.target.value)}
+                    placeholder="e.g. 52149"
+                    style={inputStyle}
+                  />
+                </div>
+                <div style={{ flex: "0 0 170px" }}>
+                  <label style={labelStyle}>Schedule Date</label>
+                  <input
+                    type="date"
+                    value={scheduleDate}
+                    onChange={e => setScheduleDate(e.target.value)}
+                    style={inputStyle}
+                  />
+                </div>
+              </div>
+
+              {/* Order grid */}
+              <div style={{ overflowX: "auto", marginBottom: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: "22%" }} />{/* Item */}
+                    <col style={{ width: "8%" }} /> {/* On Hand */}
+                    <col style={{ width: "10%" }} />{/* Fill $ exc */}
+                    <col style={{ width: "10%" }} />{/* Fill inc GST */}
+                    <col style={{ width: "10%" }} />{/* Rent $ */}
+                    <col style={{ width: "13%" }} />{/* Order */}
+                    <col style={{ width: "13%" }} />{/* Return */}
+                    <col style={{ width: "14%" }} />{/* Ret. Other */}
+                  </colgroup>
+                  <thead>
+                    <tr style={{ background: C.bg }}>
+                      <th style={{ ...eoThStyle, textAlign: "left" }}>Item</th>
+                      <th style={{ ...eoThStyle, textAlign: "center" }}>
+                        <div>Cyl.</div><div>On Hand</div>
+                      </th>
+                      <th style={{ ...eoThStyle, textAlign: "center" }}>
+                        <div>Fill $</div><div style={{ color: C.muted, fontWeight: 400, textTransform: "none", fontSize: 10 }}>exc GST</div>
+                      </th>
+                      <th style={{ ...eoThStyle, textAlign: "center", opacity: eoIsCommercial ? 0.5 : 1 }}>
+                        <div>Fill $</div><div style={{ color: eoIsCommercial ? C.muted : C.accent, fontWeight: 400, textTransform: "none", fontSize: 10 }}>inc GST</div>
+                      </th>
+                      <th style={{ ...eoThStyle, textAlign: "center" }}>
+                        <div>Rent $</div><div style={{ color: C.muted, fontWeight: 400, textTransform: "none", fontSize: 10 }}>{eoIsCommercial ? "exc GST" : "inc GST"}</div>
+                      </th>
+                      <th style={{ ...eoThStyle, textAlign: "center", background: "#f59e0b18", color: C.accent }}>Order</th>
+                      <th style={{ ...eoThStyle, textAlign: "center" }}>Return</th>
+                      <th style={{ ...eoThStyle, textAlign: "center" }}>Ret. Other</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupedItems.map((g) => {
+                      const row = rows[g.key] || {};
+                      const hasQty = parseFloat(row.order_qty) > 0 || parseFloat(row.return_qty) > 0 || parseFloat(row.return_other_qty) > 0;
+                      const qtyInput = (field) => (
+                        <input type="number" min="0" value={row[field] || ""} onChange={e => updateRow(g.key, field, e.target.value)} placeholder="0"
+                          style={{ ...inputStyle, textAlign: "center", width: "100%", padding: "5px 4px", boxSizing: "border-box",
+                            ...(field === "order_qty" ? { background: parseFloat(row.order_qty) > 0 ? "#f59e0b28" : "#f59e0b10", borderColor: parseFloat(row.order_qty) > 0 ? C.accent : C.inputBorder } : {}) }} />
+                      );
+                      return (
+                        <tr key={g.key} style={{ borderBottom: `1px solid ${C.border}`, background: hasQty ? "#ffffff0a" : "transparent" }}>
+                          <td style={{ padding: "6px 8px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {g.label}
+                            {(g.fill_is_fixed || g.rent_is_fixed) && <span style={{ marginLeft: 4, fontSize: 10, color: C.accent, fontWeight: 400 }}>[FX]</span>}
+                          </td>
+                          <td style={{ padding: "6px 4px", textAlign: "center", color: g.on_hand > 0 ? C.green : C.muted, fontWeight: g.on_hand > 0 ? 600 : 400 }}>
+                            {g.on_hand > 0 ? g.on_hand : "—"}
+                          </td>
+                          <td style={{ padding: "6px 4px", textAlign: "center", opacity: eoIsCommercial ? 1 : 0.6, fontSize: eoIsCommercial ? 13 : 11 }}>
+                            {g.fill_price != null ? fmtCurrency(g.fill_price) : <span style={{ color: C.muted }}>—</span>}
+                          </td>
+                          <td style={{ padding: "6px 4px", textAlign: "center", color: eoIsCommercial ? C.muted : C.accent, fontWeight: eoIsCommercial ? 400 : 700, opacity: eoIsCommercial ? 0.5 : 1 }}>
+                            {g.fill_price != null ? fmtCurrency(grossOf(g.fill_price)) : <span style={{ color: C.muted }}>—</span>}
+                          </td>
+                          <td style={{ padding: "6px 4px", textAlign: "center", fontWeight: 600 }}>
+                            {g.rent_price != null ? fmtCurrency(eoIsCommercial ? g.rent_price : grossOf(g.rent_price)) : <span style={{ color: C.muted }}>—</span>}
+                          </td>
+                          <td style={{ padding: "3px 4px", background: "#f59e0b0e" }}>{qtyInput("order_qty")}</td>
+                          <td style={{ padding: "3px 4px" }}>{qtyInput("return_qty")}</td>
+                          <td style={{ padding: "3px 4px" }}>{qtyInput("return_other_qty")}</td>
+                        </tr>
+                      );
+                    })}
+                    {/* Extra manually-added rows */}
+                    {extraRows.map((er) => {
+                      const excPrice = parseFloat(er.price) || 0;
+                      const incGst = grossOf(excPrice);
+                      const isSale = er.item_type === "sale";
+                      const updateEr = (field, val) => setExtraRows(rs => rs.map(r => r.uid === er.uid ? { ...r, [field]: val } : r));
+                      const qtyInput = (field) => (
+                        <input type="number" min="0" value={er[field] || ""} onChange={e => updateEr(field, e.target.value)} placeholder="0"
+                          style={{ ...inputStyle, textAlign: "center", width: "100%", padding: "5px 4px", boxSizing: "border-box",
+                            ...(field === "order_qty" ? { background: parseFloat(er.order_qty) > 0 ? "#f59e0b28" : "#f59e0b10", borderColor: parseFloat(er.order_qty) > 0 ? C.accent : C.inputBorder } : {}) }} />
+                      );
+                      return (
+                        <tr key={er.uid} style={{ borderBottom: `1px solid ${C.border}`, background: "#3b82f611" }}>
+                          <td style={{ padding: "6px 8px", fontWeight: 600, color: C.blue, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{er.label}</td>
+                          <td style={{ padding: "6px 4px", textAlign: "center", color: er.on_hand > 0 ? C.green : C.muted }}>{er.on_hand > 0 ? er.on_hand : "—"}</td>
+                          <td style={{ padding: "3px 4px" }}>
+                            {isSale
+                              ? <input type="number" min="0" step="0.01" value={er.price} onChange={e => updateEr("price", e.target.value)} placeholder="0.00"
+                                  style={{ ...inputStyle, textAlign: "center", width: "100%", padding: "5px 4px", boxSizing: "border-box" }} />
+                              : <span style={{ color: C.muted, display: "block", textAlign: "center" }}>—</span>}
+                          </td>
+                          <td style={{ padding: "6px 4px", textAlign: "center", color: C.accent }}>
+                            {isSale && excPrice > 0 ? fmtCurrency(incGst) : <span style={{ color: C.muted }}>—</span>}
+                          </td>
+                          <td style={{ padding: "3px 4px" }}>
+                            {!isSale
+                              ? <input type="number" min="0" step="0.01" value={er.price} onChange={e => updateEr("price", e.target.value)} placeholder="0.00"
+                                  style={{ ...inputStyle, textAlign: "center", width: "100%", padding: "5px 4px", boxSizing: "border-box" }} />
+                              : <span style={{ color: C.muted, display: "block", textAlign: "center" }}>—</span>}
+                          </td>
+                          <td style={{ padding: "3px 4px", background: "#f59e0b0e" }}>{qtyInput("order_qty")}</td>
+                          <td style={{ padding: "3px 4px" }}>{qtyInput("return_qty")}</td>
+                          <td style={{ padding: "3px 4px" }}>{qtyInput("return_other_qty")}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Add Item row */}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16, padding: "8px 0" }}>
+                <select value={addItemSelect} onChange={e => setAddItemSelect(e.target.value)} style={{ ...inputStyle, flex: 1, maxWidth: 300 }}>
+                  <option value="">+ Add extra item to order…</option>
+                  {(prepData.items || []).map(item => (
+                    <option key={item.cylinder_type_id} value={item.cylinder_type_id}>{item.label}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    if (!addItemSelect) return;
+                    const found = (prepData.items || []).find(i => i.cylinder_type_id === addItemSelect);
+                    if (!found) return;
+                    setExtraRows(rs => [...rs, {
+                      uid: Math.random().toString(36).slice(2),
+                      cylinder_type_id: found.cylinder_type_id,
+                      label: found.label,
+                      item_type: found.item_type,
+                      on_hand: found.on_hand || 0,
+                      price: String(found.price || ""),
+                      order_qty: "", return_qty: "", return_other_qty: "",
+                    }]);
+                    setAddItemSelect("");
+                  }}
+                  style={{ ...btnStyle(C.blue), padding: "8px 16px" }}
+                >
+                  Add
+                </button>
+                {extraRows.length > 0 && (
+                  <button onClick={() => setExtraRows([])} style={{ ...btnStyle(C.muted), padding: "8px 12px", fontSize: 12 }}>Clear added</button>
+                )}
+              </div>
+
+              {/* Bottom: Notes + Payment (COD) + Submit */}
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <div style={{ flex: 2, minWidth: 200 }}>
+                  <label style={labelStyle}>Notes (saved to customer account)</label>
+                  <textarea
+                    value={notes}
+                    onChange={e => setNotes(e.target.value)}
+                    rows={2}
+                    placeholder="Internal notes…"
+                    style={{ ...inputStyle, resize: "vertical" }}
+                  />
+                </div>
+                {isCOD && (
+                  <>
+                    <div style={{ flex: "0 0 150px" }}>
+                      <label style={labelStyle}>Payment Amount</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={paymentAmount}
+                        onChange={e => setPaymentAmount(e.target.value)}
+                        placeholder="0.00"
+                        style={inputStyle}
+                      />
+                    </div>
+                    <div style={{ flex: "0 0 120px" }}>
+                      <label style={labelStyle}>Method</label>
+                      <input
+                        value={paymentMethod}
+                        onChange={e => setPaymentMethod(e.target.value)}
+                        placeholder="Cash"
+                        style={inputStyle}
+                      />
+                    </div>
+                  </>
+                )}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+                  {submitError && (
+                    <div style={{ color: C.red, fontSize: 13, fontWeight: 600, background: "#ef444418", border: `1px solid ${C.red}`, borderRadius: 6, padding: "6px 12px" }}>
+                      {submitError}
+                    </div>
+                  )}
+                  <button
+                    onClick={submitOrder}
+                    disabled={submitting}
+                    style={{ ...btnStyle(C.green), padding: "10px 28px", fontSize: 14 }}
+                  >
+                    {submitting ? "Submitting…" : "Submit Order"}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Customer search screen ────────────────────────────────────────────────
+  return (
+    <div style={{ padding: 24, maxWidth: 1200 }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Easy Order</div>
+        <div style={{ color: C.muted, fontSize: 13 }}>
+          Search for a customer by name, address, phone or company, then click to open their order form.
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 520, marginBottom: 24 }}>
+        <input
+          ref={searchRef}
+          placeholder="Search by name, address, phone or company…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ ...inputStyle, fontSize: 15, padding: "12px 16px" }}
+        />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10 }}>
+        {filteredCustomers.map(c => (
+          <div
+            key={c.id}
+            onClick={() => openCustomer(c)}
+            style={{
+              background: C.card, border: `1px solid ${C.border}`, borderRadius: 8,
+              padding: "14px 16px", cursor: "pointer", transition: "border-color 0.15s",
+            }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = C.accent}
+            onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
+          >
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 3 }}>
+              {formatCustomerDisplay(c)}
+            </div>
+            {c.address && (
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 2 }}>{c.address}</div>
+            )}
+            {c.phone && (
+              <div style={{ fontSize: 12, color: C.muted }}>{c.phone}</div>
+            )}
+            {c.payment_terms && (
+              <div style={{ marginTop: 6 }}>
+                <span style={{
+                  fontSize: 10, padding: "2px 7px", borderRadius: 3, fontWeight: 700,
+                  background: c.payment_terms.toLowerCase() === "cod" ? "#ef444422" : "#3b82f622",
+                  color: c.payment_terms.toLowerCase() === "cod" ? C.red : C.blue,
+                }}>
+                  {c.payment_terms}
+                </span>
+              </div>
+            )}
+          </div>
+        ))}
+        {filteredCustomers.length === 0 && (
+          <div style={{ color: C.muted, fontSize: 14, gridColumn: "1 / -1", padding: 20 }}>
+            {search.trim() ? `No customers found for "${search}"` : "No customers available."}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ==================== MAIN APP ====================
 export default function App() {
   const [authState, setAuthState] = useState("loading"); // loading | setup | login | app
@@ -6274,6 +7726,9 @@ export default function App() {
   const [view, setView] = useState("dashboard");
   const [pendingOrderId, setPendingOrderId] = useState(null);
   const [pendingNewOrderCustomerId, setPendingNewOrderCustomerId] = useState(null);
+  const [pendingEasyOrderCustomerId, setPendingEasyOrderCustomerId] = useState(null);
+  const [pendingCustomerId, setPendingCustomerId] = useState(null);
+  const [returnToCustomerId, setReturnToCustomerId] = useState(null);
   // 3.0.18: global search — results + selection for navigation
   const [globalSearchResults, setGlobalSearchResults] = useState(null);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
@@ -6317,15 +7772,34 @@ export default function App() {
     stats.reload();
   };
 
+  // Track authState in a ref so the onAuthFail handler always sees the current value
+  // without needing to be re-registered. This prevents in-flight 401 responses from
+  // unauthenticated requests (fired before login) from kicking the user back to the
+  // login screen after they have already successfully logged in.
+  const authStateRef = useRef("loading");
+  useEffect(() => { authStateRef.current = authState; }, [authState]);
+
   // Check auth on mount
   useEffect(() => {
-    setAuthFailHandler(() => setAuthState("login"));
+    setAuthFailHandler(() => {
+      if (authStateRef.current === "app") setAuthState("login");
+    });
     api.authStatus().then(r => {
       if (r.needsSetup) setAuthState("setup");
       else if (r.user) { setUser(r.user); setAuthState("app"); }
       else setAuthState("login");
     }).catch(() => setAuthState("login"));
   }, []);
+
+  // Reload global data whenever authState transitions to "app" (covers both
+  // initial load when already logged in and manual login after a restart).
+  useEffect(() => {
+    if (authState !== "app") return;
+    customers.reload();
+    cylinderTypes.reload();
+    stats.reload();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authState]);
 
   // Load email config + business settings once authed
   useEffect(() => {
@@ -6352,17 +7826,18 @@ export default function App() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: Icons.dashboard },
+    { id: "easyorder", label: "Easy Order", icon: Icons.easyorder },
     { id: "orders", label: "Orders", icon: Icons.route },
     { id: "customers", label: "Customers", icon: Icons.customers },
     { id: "cylindertypes", label: "Cylinder Types", icon: Icons.settings },
     { id: "optimoroute", label: "OptimoRoute", icon: Icons.sync },
-    { id: "delivery", label: "Deliver / Return", icon: Icons.delivery },
     { id: "tracking", label: "Cylinder Tracking", icon: Icons.cylinders },
     { id: "openingbalances", label: "Opening Balances", icon: Icons.cylinders },
-    { id: "billing", label: "Billing", icon: Icons.billing },
+    { id: "billing", label: "Invoicing", icon: Icons.billing },
     { id: "rentalhistory", label: "Rental History", icon: Icons.billing },
     { id: "credits", label: "Credit Notes", icon: Icons.billing },
     ...(isAdmin ? [{ id: "pricing", label: "Pricing Manager", icon: Icons.pricing }] : []),
+    ...(isAdmin ? [{ id: "reports", label: "Reports", icon: Icons.reports }] : []),
     ...(isAdmin ? [{ id: "users", label: "Manage Users", icon: Icons.users }] : []),
     ...(isAdmin ? [{ id: "auditlog", label: "Audit Log", icon: Icons.settings }] : []),
     ...(isAdmin ? [{ id: "administrator", label: "Administrator", icon: Icons.settings }] : []),
@@ -6370,15 +7845,16 @@ export default function App() {
 
   const renderView = () => {
     switch (view) {
-      case "dashboard": return <DashboardView stats={stats.data} />;
-      case "orders": return <OrdersView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingOrderId={pendingOrderId} onPendingOrderHandled={() => setPendingOrderId(null)} pendingNewOrderCustomerId={pendingNewOrderCustomerId} onPendingNewOrderHandled={() => setPendingNewOrderCustomerId(null)} emailEnabled={emailEnabled} emailConfig={emailConfig} />;
-      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId, customerId) => { if (orderId) { setPendingOrderId(orderId); } else { setPendingNewOrderCustomerId(customerId); } setView("orders"); }} cylinderTypes={cylinderTypes.data || []} userRole={user?.role} emailEnabled={emailEnabled} emailConfig={emailConfig} />;
+      case "dashboard": return <DashboardView stats={stats.data} onNavigate={setView} />;
+      case "easyorder": return <EasyOrderView customers={customers.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingCustomerId={pendingEasyOrderCustomerId} onPendingCustomerHandled={() => setPendingEasyOrderCustomerId(null)} />;
+      case "orders": return <OrdersView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} reloadCustomers={customers.reload} pendingOrderId={pendingOrderId} onPendingOrderHandled={() => setPendingOrderId(null)} pendingNewOrderCustomerId={pendingNewOrderCustomerId} onPendingNewOrderHandled={() => setPendingNewOrderCustomerId(null)} emailEnabled={emailEnabled} emailConfig={emailConfig} onReturnToCustomer={returnToCustomerId ? () => { setPendingCustomerId(returnToCustomerId); setReturnToCustomerId(null); setView("customers"); } : null} />;
+      case "customers": return <CustomersView customers={customers.data} reload={customers.reload} showToast={showToast} onOpenOrder={(orderId, customerId, returnCustId) => { if (orderId) { setPendingOrderId(orderId); setReturnToCustomerId(returnCustId || null); } else { setPendingNewOrderCustomerId(customerId); setReturnToCustomerId(null); } setView("orders"); }} onOpenEasyOrder={(customerId) => { setPendingEasyOrderCustomerId(customerId); setView("easyorder"); }} cylinderTypes={cylinderTypes.data || []} userRole={user?.role} emailEnabled={emailEnabled} emailConfig={emailConfig} openCustomerId={pendingCustomerId} onOpenCustomerHandled={() => setPendingCustomerId(null)} />;
       case "cylindertypes": return <CylinderTypesView cylinderTypes={cylinderTypes.data} reload={cylinderTypes.reload} showToast={showToast} />;
-      case "delivery": return <DeliveryView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} refreshAll={refreshAll} />;
-      case "tracking": return <TrackingView customers={customers.data} cylinderTypes={cylinderTypes.data} />;
-      case "billing": return <BillingView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} reloadCustomers={customers.reload} emailEnabled={emailEnabled} emailConfig={emailConfig} />;
+      case "tracking": return <TrackingView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} />;
+      case "billing": return <BillingView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} reloadCustomers={customers.reload} emailEnabled={emailEnabled} emailConfig={emailConfig} onOpenCustomer={(custId) => { setPendingCustomerId(custId); setView("customers"); }} />;
       case "rentalhistory": return <RentalHistoryView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} emailEnabled={emailEnabled} emailConfig={emailConfig} />;
       case "pricing": return isAdmin ? <PricingView customers={customers.data} cylinderTypes={cylinderTypes.data} showToast={showToast} userRole={user?.role} /> : null;
+      case "reports": return isAdmin ? <div><h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Reports</h2><ReportsPanel showToast={showToast} /></div> : null;
       case "openingbalances": return <OpeningBalancesView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} />;
       case "optimoroute": return <OptimoRouteView customers={customers.data || []} cylinderTypes={cylinderTypes.data || []} showToast={showToast} refreshAll={refreshAll} />;
       case "users": return isAdmin ? <UsersView showToast={showToast} /> : null;
@@ -6393,23 +7869,23 @@ export default function App() {
     <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: C.bg, color: C.text }}>
       {/* SIDEBAR */}
       <nav style={{ width: 240, background: C.panel, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ padding: "16px 16px 14px", borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ padding: "18px 16px 14px", borderBottom: `1px solid ${C.border}` }}>
           {bizSettings.business_logo ? (
             <img
               src={bizSettings.business_logo}
               alt="logo"
-              style={{ maxHeight: 48, maxWidth: 180, objectFit: "contain", display: "block", marginBottom: 6 }}
+              style={{ maxHeight: 90, maxWidth: "100%", width: "100%", objectFit: "contain", display: "block", marginBottom: 8 }}
             />
           ) : (
-            <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg, #f59e0b, #ef4444)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#fff", marginBottom: 6 }}>CT</div>
+            <div style={{ width: 44, height: 44, borderRadius: 10, background: "linear-gradient(135deg, #f59e0b, #ef4444)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 18, color: "#fff", marginBottom: 8 }}>CT</div>
           )}
           {bizSettings.business_name && (
-            <div style={{ fontWeight: 700, fontSize: 14, color: C.text, letterSpacing: "-0.01em", lineHeight: 1.2, marginBottom: 4 }}>
+            <div style={{ fontWeight: 800, fontSize: 17, color: C.text, letterSpacing: "-0.02em", lineHeight: 1.2, marginBottom: 6 }}>
               {bizSettings.business_name}
             </div>
           )}
           <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.02em" }}>
-            Powered by <span style={{ color: C.accent, fontWeight: 700 }}>CorvexTrack™</span> by Corvexity
+            <span style={{ color: C.accent, fontWeight: 700 }}>CorvexTrack™</span> powered by Corvexity
           </div>
         </div>
 
@@ -6511,7 +7987,7 @@ export default function App() {
         <div style={{
           position: "fixed", bottom: 24, right: 24, padding: "12px 20px", borderRadius: 8,
           background: toast.type === "error" ? C.red : C.green, color: "#fff", fontWeight: 600, fontSize: 13,
-          boxShadow: "0 4px 12px rgba(0,0,0,0.3)", zIndex: 1000,
+          boxShadow: "0 4px 12px rgba(0,0,0,0.3)", zIndex: 9999,
         }}>
           {toast.msg}
         </div>
