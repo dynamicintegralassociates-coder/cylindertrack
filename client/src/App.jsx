@@ -6555,6 +6555,8 @@ function AdministratorView({ showToast }) {
         business_logo: settings.business_logo || "",
         invoice_notes: settings.invoice_notes || "",
         statement_notes: settings.statement_notes || "",
+        email_subject_prefix: settings.email_subject_prefix || "",
+        email_signature: settings.email_signature || "",
       };
       await api.updateSettings(payload);
       showToast("Settings saved");
@@ -6741,6 +6743,59 @@ function AdministratorView({ showToast }) {
         <SeqEditor title="Customer Number Sequence" prefixKey="customer_seq_prefix" paddingKey="customer_seq_padding" nextKey="customer_seq_next" />
         <SeqEditor title="Order Number Sequence" prefixKey="order_seq_prefix" paddingKey="order_seq_padding" nextKey="order_seq_next" />
       </div>
+
+      {/* Emails & Invoices */}
+      <h3 style={{ fontSize: 16, fontWeight: 700, margin: "28px 0 8px" }}>Emails &amp; Invoices</h3>
+      <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
+        Customise the email subject line and the signature shown at the bottom of every invoice email. The preview below reflects your current business details and notes.
+      </div>
+      <Card>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={labelStyle}>Email Subject Prefix <span style={{ color: C.muted, fontWeight: 400, textTransform: "none" }}>(prepended to every invoice email subject, e.g. "Acme Gas –")</span></label>
+            <input
+              value={settings.email_subject_prefix || ""}
+              onChange={e => update("email_subject_prefix", e.target.value)}
+              style={inputStyle}
+              placeholder="e.g. Acme Gas –"
+            />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={labelStyle}>Email Signature <span style={{ color: C.muted, fontWeight: 400, textTransform: "none" }}>(shown at the bottom of the email body — supports plain text)</span></label>
+            <textarea
+              value={settings.email_signature || ""}
+              onChange={e => update("email_signature", e.target.value)}
+              rows={4}
+              style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
+              placeholder={"Kind regards,\nThe Acme Gas Team\nPhone: (07) 1234 5678"}
+            />
+          </div>
+        </div>
+      </Card>
+
+      {/* Invoice Preview */}
+      <h3 style={{ fontSize: 16, fontWeight: 700, margin: "20px 0 8px" }}>Invoice Preview</h3>
+      <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
+        Live preview of how your invoices will look with the current settings. Save changes above first to see them reflected here.
+      </div>
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: `1px solid ${C.inputBorder}` }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Invoice Print Preview</span>
+          <a
+            href="/api/invoices/preview/print"
+            target="_blank"
+            rel="noreferrer"
+            style={{ ...btnStyle(C.blue), padding: "5px 14px", fontSize: 12, textDecoration: "none", display: "inline-block" }}
+          >
+            Open in New Tab
+          </a>
+        </div>
+        <iframe
+          src="/api/invoices/preview/print"
+          title="Invoice Preview"
+          style={{ width: "100%", height: 700, border: "none", display: "block", background: "#fff" }}
+        />
+      </Card>
 
       {/* Billing Schedule */}
       <div style={{ marginTop: 24 }}>

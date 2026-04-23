@@ -2840,6 +2840,143 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
     res.send(html);
   });
 
+  // GET /invoices/preview/print — sample invoice for admin designer preview
+  router.get("/invoices/preview/print", (req, res) => {
+    const bizName    = getSetting(db, "business_name",    "Your Business Name");
+    const bizABN     = getSetting(db, "business_abn",     "");
+    const bizAddress = getSetting(db, "business_address", "");
+    const bizPhone   = getSetting(db, "business_phone",   "");
+    const bizEmail   = getSetting(db, "business_email",   "");
+    const bizBank    = getSetting(db, "business_bank",    "");
+    const bizLogo    = getSetting(db, "business_logo",    "");
+    const invoiceNotes = getSetting(db, "invoice_notes",  "");
+
+    const today = new Date().toISOString().split("T")[0];
+    const dueDate = new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0];
+    const fmt = (v) => `$${((v || 0)).toFixed(2)}`;
+    const gross = (v) => Math.round((v || 0) * 1.10 * 100) / 100;
+
+    const sampleLines = [
+      { label: "D-Size Oxygen (Rental)",    qty: 4, unit_price: 5.50, line_total: 22.00 },
+      { label: "E-Size CO2 (Rental)",        qty: 2, unit_price: 4.00, line_total:  8.00 },
+      { label: "G-Size Argon Mix (Rental)",  qty: 1, unit_price: 8.00, line_total:  8.00 },
+    ];
+    const subtotal   = sampleLines.reduce((s, l) => s + l.line_total, 0);
+    const gstAmt     = Math.round(subtotal * 0.10 * 100) / 100;
+    const total      = gross(subtotal);
+
+    const rowsHTML = sampleLines.map(l => `
+      <tr>
+        <td>${l.label}</td>
+        <td class="num">${l.qty}</td>
+        <td class="num">${fmt(gross(l.unit_price))}</td>
+        <td class="num">${fmt(gross(l.line_total))}</td>
+      </tr>`).join("");
+
+    const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Invoice Preview</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:Arial,sans-serif; font-size:13px; color:#1e293b; background:#fff; padding:40px; }
+  .header-band { background:#1d4ed8; color:#fff; border-radius:8px 8px 0 0; padding:20px 28px; display:flex; justify-content:space-between; align-items:center; }
+  .header-band-title { font-size:26px; font-weight:900; letter-spacing:0.04em; }
+  .header-band-sub   { font-size:11px; color:#bfdbfe; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; margin-top:2px; }
+  .inv-band-number   { font-size:22px; font-weight:800; text-align:right; }
+  .inv-band-label    { font-size:10px; color:#bfdbfe; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; text-align:right; margin-bottom:2px; }
+  .header-inner      { background:#eff6ff; border:1px solid #bfdbfe; border-top:none; border-radius:0 0 8px 8px; padding:18px 28px 20px; display:flex; justify-content:space-between; margin-bottom:28px; }
+  .biz-logo   { max-height:70px; max-width:200px; object-fit:contain; display:block; margin-bottom:8px; }
+  .biz-name   { font-size:18px; font-weight:800; color:#1e3a5f; margin-bottom:3px; }
+  .biz-detail { font-size:12px; color:#475569; line-height:1.7; }
+  .inv-meta   { text-align:right; font-size:12px; color:#334155; line-height:1.9; }
+  .inv-label  { font-size:10px; text-transform:uppercase; letter-spacing:0.07em; color:#64748b; font-weight:700; }
+  .bill-to    { margin-bottom:24px; }
+  .bill-label { font-size:10px; text-transform:uppercase; letter-spacing:0.07em; color:#1d4ed8; font-weight:700; margin-bottom:6px; }
+  .bill-name  { font-size:15px; font-weight:700; }
+  .bill-detail{ font-size:12px; color:#475569; line-height:1.7; }
+  .section-label { font-size:10px; text-transform:uppercase; color:#1d4ed8; font-weight:700; margin:18px 0 6px; border-left:3px solid #2563eb; padding-left:8px; }
+  .divider    { border:none; border-top:2px solid #dbeafe; margin:20px 0; }
+  table       { width:100%; border-collapse:collapse; margin-bottom:8px; }
+  th          { background:#1d4ed8; text-align:left; padding:8px 10px; font-size:11px; text-transform:uppercase; color:#fff; }
+  tr:nth-child(even) td { background:#f0f7ff; }
+  td          { padding:7px 10px; border-bottom:1px solid #e2e8f0; font-size:12px; }
+  .num        { text-align:right; }
+  .totals     { margin-top:20px; display:flex; justify-content:flex-end; }
+  .totals-table { width:280px; }
+  .totals-table td { border:none; padding:4px 10px; font-size:13px; }
+  .totals-table .label { color:#475569; }
+  .totals-table .val   { text-align:right; font-weight:600; }
+  .total-row td   { font-size:16px; font-weight:800; color:#1d4ed8; border-top:2px solid #1d4ed8; padding-top:8px; background:transparent; }
+  .owed-row td    { color:#dc2626; font-size:15px; font-weight:800; background:transparent; }
+  .bank-box       { margin-top:28px; padding:14px 16px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px; font-size:12px; color:#334155; }
+  .bank-label     { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:#1d4ed8; margin-bottom:6px; }
+  .inv-notes      { margin-top:20px; padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; font-size:12px; color:#475569; line-height:1.6; white-space:pre-wrap; }
+  .preview-banner { position:fixed; top:0; left:0; right:0; background:#f59e0b; color:#fff; padding:6px; text-align:center; font-size:12px; font-weight:700; z-index:100; }
+  @media print { .preview-banner { display:none; } @page { margin:18mm 16mm; size:A4; } }
+</style>
+</head>
+<body>
+<div class="preview-banner">PREVIEW — Sample invoice using your current business settings</div>
+<div style="margin-top:32px">
+<div class="header-band">
+  <div>
+    <div class="header-band-title">TAX INVOICE</div>
+    ${bizName ? `<div class="header-band-sub">${bizName}</div>` : ""}
+  </div>
+  <div>
+    <div class="inv-band-label">Invoice Number</div>
+    <div class="inv-band-number">INV-PREVIEW</div>
+  </div>
+</div>
+<div class="header-inner">
+  <div>
+    ${bizLogo ? `<img class="biz-logo" src="${bizLogo}" alt="logo">` : ""}
+    ${bizName ? `<div class="biz-name">${bizName}</div>` : ""}
+    <div class="biz-detail">
+      ${bizAddress ? bizAddress + "<br>" : ""}
+      ${bizPhone   ? "Ph: " + bizPhone + (bizEmail ? " &nbsp;|&nbsp; " : "<br>") : ""}
+      ${bizEmail   ? "Email: " + bizEmail + "<br>" : ""}
+      ${bizABN     ? "ABN: " + bizABN : ""}
+    </div>
+  </div>
+  <div class="inv-meta">
+    <span class="inv-label">Invoice Date</span><br>${today}<br>
+    <span class="inv-label">Due Date</span><br>${dueDate}<br>
+    <span class="inv-label">Status</span><br><span style="background:#fef3c7;color:#b45309;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700">OPEN</span>
+  </div>
+</div>
+<div class="bill-to">
+  <div class="bill-label">Bill To</div>
+  <div class="bill-name">Sample Customer Pty Ltd</div>
+  <div class="bill-detail">
+    ABN: 12 345 678 901<br>
+    123 Sample Street, Brisbane QLD 4000<br>
+    Ph: (07) 1234 5678<br>
+    accounts@samplecustomer.com.au
+  </div>
+</div>
+<hr class="divider">
+<div class="section-label">Rental Charges</div>
+<table>
+  <thead><tr><th>Item</th><th class="num">Qty on Hand</th><th class="num">Rate (inc GST)</th><th class="num">Total (inc GST)</th></tr></thead>
+  <tbody>${rowsHTML}</tbody>
+</table>
+<div class="totals">
+  <table class="totals-table">
+    <tr class="total-row"><td class="label">Total (incl. GST)</td><td class="val">${fmt(total)}</td></tr>
+    <tr><td class="label" style="font-size:11px;color:#888">Includes GST of</td><td class="val" style="font-size:11px;color:#888">${fmt(gstAmt)}</td></tr>
+    <tr class="owed-row"><td class="label">Balance Due</td><td class="val">${fmt(total)}</td></tr>
+  </table>
+</div>
+${invoiceNotes ? `<div class="inv-notes">${invoiceNotes.replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div>` : ""}
+${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>${bizBank.replace(/\n/g,"<br>")}</div>` : ""}
+</div>
+</body></html>`;
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  });
+
   // Record a payment against an invoice
   router.post("/invoices/:id/payment", async (req, res) => {
     const { amount, method, reference, date, notes } = req.body;
@@ -3943,69 +4080,84 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
   // EMAIL — server-side invoice delivery via Resend
   // ============================================================
 
-  // Helper: load an invoice + its lines + customer in the shape email.js expects.
-  // Pulls cylinder breakdown from rental_invoice transactions on the same date.
+  // Helper: load an invoice + its sections + customer + settings in the shape email.js expects.
   function buildInvoiceForEmail(invoiceId) {
     const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(invoiceId);
     if (!inv) return null;
     const customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(inv.customer_id);
     if (!customer) return null;
 
-    // Try to reconstruct line items.
-    // For order-linked invoices: derive from order_lines
-    // For rental invoices: derive from rental_invoice transactions on invoice_date
-    let lines = [];
-    if (inv.order_id) {
-      const orderLines = db.prepare(
-        `SELECT ol.*, ct.label as cylinder_label
-         FROM order_lines ol
-         LEFT JOIN cylinder_types ct ON ct.id = ol.cylinder_type_id
-         WHERE ol.order_id = ?
-         ORDER BY ol.sort_order, ol.id`
-      ).all(inv.order_id);
-      for (const ol of orderLines) {
-        const dq = ol.delivered_qty > 0 ? ol.delivered_qty : ol.qty;
-        lines.push({
-          cylinder_label: ol.cylinder_label || "Item",
-          qty: dq,
-          on_hand: dq,
-          unit_price: ol.unit_price || 0,
-          line_total: Math.round(dq * (ol.unit_price || 0) * 100) / 100,
-        });
-      }
-    } else {
-      // Rental invoice: pull all rental_invoice transactions for this customer on this date
-      const txns = db.prepare(`
-        SELECT t.cylinder_type, t.qty, ct.label, ct.default_price
-        FROM transactions t
-        JOIN cylinder_types ct ON ct.id = t.cylinder_type
-        WHERE t.customer_id = ? AND t.type = 'rental_invoice' AND t.date = ?
-      `).all(inv.customer_id, inv.invoice_date);
-      for (const t of txns) {
-        const unitPrice = getPriceForDate(db, inv.customer_id, t.cylinder_type, inv.invoice_date, t.default_price || 0);
-        lines.push({
-          cylinder_label: t.label,
-          qty: t.qty,
-          on_hand: t.qty,
-          unit_price: unitPrice,
-          line_total: Math.round(unitPrice * t.qty * 100) / 100,
-        });
-      }
-    }
+    // Business settings for email template
+    const settingsRows = db.prepare("SELECT key, value FROM settings").all();
+    const settings = {};
+    for (const r of settingsRows) settings[r.key] = r.value;
 
-    const subtotal = inv.total || 0;
-    const gst = Math.round(subtotal * 0.10 * 100) / 100;
+    // All orders linked to this invoice
+    const linkedOrders = db.prepare(
+      "SELECT id, order_number, order_date, order_detail, po_number, notes FROM orders WHERE invoice_id = ? ORDER BY order_date ASC"
+    ).all(inv.id);
+
+    const olStmt = db.prepare(
+      `SELECT ol.id, ol.cylinder_type_id, ol.qty, ol.delivered_qty, ol.unit_price, ol.line_total, ol.status,
+              ct.label as cylinder_label
+       FROM order_lines ol
+       LEFT JOIN cylinder_types ct ON ct.id = ol.cylinder_type_id
+       WHERE ol.order_id = ? AND ol.status != 'cancelled'
+       ORDER BY ol.sort_order, ol.id`
+    );
+
+    const orderSections = linkedOrders.map(o => {
+      const oLines = olStmt.all(o.id).map(l => {
+        const dq = l.delivered_qty > 0 ? l.delivered_qty : l.qty;
+        return { ...l, qty: dq, line_total: Math.round(dq * (l.unit_price || 0) * 100) / 100 };
+      });
+      return { order: o, lines: oLines };
+    });
+
+    // Rental transactions — prefer invoice_id match for accuracy
+    const rentalTxns = db.prepare(`
+      SELECT t.cylinder_type as cylinder_type_id, t.qty, ct.label as cylinder_label, ct.default_price
+      FROM transactions t
+      JOIN cylinder_types ct ON ct.id = t.cylinder_type
+      WHERE t.type = 'rental_invoice'
+        AND t.source IN ('auto_rental', 'order_linked_rental')
+        AND (
+          (t.invoice_id IS NOT NULL AND t.invoice_id != '' AND t.invoice_id = ?)
+          OR ((t.invoice_id IS NULL OR t.invoice_id = '') AND t.customer_id = ? AND t.date = ?)
+        )
+    `).all(inv.id, inv.customer_id, inv.invoice_date);
+
+    const rentalLines = rentalTxns.map(t => {
+      const unitPrice = getPriceForDate(db, inv.customer_id, t.cylinder_type_id, inv.invoice_date, t.default_price || 0);
+      return {
+        cylinder_label: t.cylinder_label,
+        qty: t.qty,
+        unit_price: unitPrice,
+        line_total: Math.round(unitPrice * t.qty * 100) / 100,
+      };
+    });
+
+    // Flat lines fallback (for direct order invoices)
+    let lines = orderSections.flatMap(s => s.lines);
+    if (lines.length === 0) lines = rentalLines;
+
+    const subtotal   = inv.total || 0;
+    const gst        = Math.round(subtotal * 0.10 * 100) / 100;
     const grandTotal = Math.round((subtotal + gst) * 100) / 100;
 
     return {
       invoice: {
         ...inv,
+        orderSections,
+        rentalLines,
         lines,
         subtotal,
         gst,
         grandTotal,
+        invoice_notes_text: settings.invoice_notes || "",
       },
       customer,
+      settings,
     };
   }
 
@@ -4046,12 +4198,16 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
       return res.status(400).json({ error: "No email address on customer record" });
     }
 
-    const subject = `Rental Invoice ${invoice.invoice_number} — ${invoice.invoice_date}`;
-    const text = emailModule.buildInvoiceText(invoice, customer, { paymentUrl: invoice.stripe_checkout_url || "" });
+    const bizName       = built.settings?.business_name || "";
+    const subjectPrefix = built.settings?.email_subject_prefix || (bizName ? `Invoice from ${bizName}` : "Invoice");
+    const subject       = `${subjectPrefix} — ${invoice.invoice_number} (${invoice.invoice_date})`;
+    const paymentUrl    = invoice.stripe_checkout_url || "";
+    const text = emailModule.buildInvoiceText(invoice, customer, { paymentUrl });
+    const html = emailModule.buildInvoiceHtml(invoice, customer, built.settings || {}, { paymentUrl });
 
     let pdfBuffer = null;
     try {
-      pdfBuffer = await emailModule.generateInvoicePdf(invoice, customer);
+      pdfBuffer = await emailModule.generateInvoicePdf(invoice, customer, built.settings || {});
     } catch (err) {
       db.prepare(
         "INSERT INTO email_log (invoice_id, invoice_number, customer_id, customer_name, recipient, subject, status, error, attempted_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -4066,6 +4222,7 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
       to: recipient,
       subject,
       text,
+      html,
       attachments: [{
         filename: `invoice-${invoice.invoice_number || invoice.id}.pdf`,
         content: pdfBuffer,
@@ -4191,12 +4348,16 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
         continue;
       }
 
-      const subject = `Rental Invoice ${invoice.invoice_number} — ${invoice.invoice_date}`;
-      const text = emailModule.buildInvoiceText(invoice, customer, { paymentUrl: invoice.stripe_checkout_url || "" });
+      const bulkBizName   = built.settings?.business_name || "";
+      const bulkSubjPfx   = built.settings?.email_subject_prefix || (bulkBizName ? `Invoice from ${bulkBizName}` : "Invoice");
+      const subject       = `${bulkSubjPfx} — ${invoice.invoice_number} (${invoice.invoice_date})`;
+      const paymentUrl    = invoice.stripe_checkout_url || "";
+      const text = emailModule.buildInvoiceText(invoice, customer, { paymentUrl });
+      const html = emailModule.buildInvoiceHtml(invoice, customer, built.settings || {}, { paymentUrl });
 
       let pdfBuffer;
       try {
-        pdfBuffer = await emailModule.generateInvoicePdf(invoice, customer);
+        pdfBuffer = await emailModule.generateInvoicePdf(invoice, customer, built.settings || {});
       } catch (err) {
         results.errors++;
         db.prepare(
@@ -4213,6 +4374,7 @@ ${bizBank ? `<div class="bank-box"><div class="bank-label">Payment Details</div>
         to: recipient,
         subject,
         text,
+        html,
         attachments: [{ filename: `invoice-${invoice.invoice_number || invoice.id}.pdf`, content: pdfBuffer }],
       });
 
